@@ -1,4 +1,4 @@
-const CACHE_NAME = 'split-sys-app-shell-v1';
+const CACHE_NAME = 'split-sys-app-shell-v2';
 const APP_SHELL = [
   './',
   './index.html',
