@@ -5,16 +5,13 @@ Simple single-page workout tracker built as plain HTML, CSS, and JavaScript.
 ## What this is
 
 - One static page with a weekly split (Monday to Sunday).
-- Click a day to view that day’s plan.
-- Press `Start Day` to begin a session.
-- Press `Mark Done` on an exercise when you complete its sets/reps.
-- Pressing `Mark Done` starts a 1:30 rest timer automatically.
-- Use `SKIP` in the rest timer panel if you want to end rest early.
-- Use `Clear Progress` in the right sidebar to reset saved progress.
-- Click any exercise row to open the detailed workout modal.
-- Automatically opens to the current day based on your local browser date.
-- Accent theme shifts Monday to Sunday using a cyberpunk neon palette.
-- Progress is saved in your browser (`localStorage`).
+- Cyberpunk neon theme that rotates by day.
+- Start/end day flow, per-exercise done toggles, and a fixed mobile session dock.
+- Automatic rest timer (`1:30`) after marking an exercise done.
+- Undo window (`5s`) for the last done action.
+- Per-day notes and small UI preferences (haptics/sound).
+- Installable PWA (Chromium prompt + iOS add-to-home guidance).
+- Offline core usage after first online load (app shell + local progress).
 
 ## Run locally
 
@@ -30,7 +27,24 @@ python3 -m http.server 8000
 
 Then visit `http://localhost:8000`.
 
-## Edit the workout plan
+## PWA install
+
+- Chromium (Chrome/Edge): use the `INSTALL` button when it appears in the top bar.
+- iOS Safari: tap Share, then choose `Add to Home Screen` (hint banner shown in-app).
+
+## Offline and file-mode behavior
+
+- Offline shell works after first successful online load when served over `http://localhost` or `https`.
+- Service worker is **not** registered on `file://`.
+- On `file://`, core tracker behavior still works (day switching, done toggles, localStorage, timer), but install/offline cache features do not.
+
+## Data model note
+
+- App state now uses `splitSysAppStateV2`.
+- Legacy key `splitSysWorkoutStateV1` is ignored and removed when V2 is initialized.
+- This upgrade intentionally allows reset instead of migration.
+
+## Edit workout content
 
 - Open `/Users/aka/Code/personal/exercise/script.js`.
 - Update the `DAYS` array.
@@ -44,8 +58,7 @@ Then visit `http://localhost:8000`.
 - `/Users/aka/Code/personal/exercise/index.html`: page markup/layout
 - `/Users/aka/Code/personal/exercise/styles.css`: styling
 - `/Users/aka/Code/personal/exercise/script.js`: workout data + interactions
-
-## Notes
-
-- Keeping this as plain HTML is a good fit for the current scope.
-- CSS and JavaScript are split out for easier maintenance while staying fully static.
+- `/Users/aka/Code/personal/exercise/manifest.webmanifest`: PWA manifest
+- `/Users/aka/Code/personal/exercise/sw.js`: service worker
+- `/Users/aka/Code/personal/exercise/icons/icon-192.png`: app icon
+- `/Users/aka/Code/personal/exercise/icons/icon-512.png`: app icon

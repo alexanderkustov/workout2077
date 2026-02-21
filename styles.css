@@ -129,6 +129,84 @@ body::before {
   text-shadow: 0 0 12px rgba(var(--accent-rgb),0.6);
 }
 
+.network-status {
+  font-size: 8px;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  color: #00f5b8;
+  border: 1px solid rgba(0,245,184,0.4);
+  background: rgba(0,245,184,0.09);
+  padding: 5px 8px 4px;
+}
+
+.network-status.offline {
+  color: #ff8c50;
+  border-color: rgba(255,140,80,0.45);
+  background: rgba(255,140,80,0.12);
+}
+
+.install-app-btn {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid rgba(var(--accent-rgb),0.5);
+  background: rgba(var(--accent-rgb),0.14);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.install-app-btn:hover {
+  background: rgba(var(--accent-rgb),0.24);
+}
+.install-app-btn.hidden {
+  display: none;
+}
+
+.ios-install-hint {
+  grid-column: 1 / -1;
+  margin: 8px 16px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(var(--accent-rgb),0.45);
+  background: rgba(var(--accent-rgb),0.1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ios-install-hint.hidden {
+  display: none;
+}
+
+.ios-hint-text {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text);
+}
+
+.ios-hint-close-btn {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 8px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid rgba(var(--accent-rgb),0.45);
+  background: rgba(var(--accent-rgb),0.1);
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+button:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+.day-tab:focus-visible,
+.wi:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.24);
+}
+
 /* ── MAIN ───────────────────────────────── */
 .main {
   position: relative;
@@ -337,6 +415,60 @@ body::before {
   background: rgba(var(--accent-rgb),0.08);
 }
 
+.notes-panel {
+  margin: 0 28px 10px;
+  border: 1px solid var(--border);
+  background: rgba(var(--accent-rgb),0.06);
+}
+
+.notes-panel > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  font-size: 9px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  user-select: none;
+}
+.notes-panel > summary::-webkit-details-marker { display: none; }
+
+.notes-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid rgba(var(--accent-rgb),0.24);
+}
+
+.notes-input {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  border: 1px solid rgba(var(--accent-rgb),0.28);
+  background: rgba(10,10,10,0.88);
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 10px;
+  margin-top: 10px;
+}
+
+.pref-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 9px;
+}
+
+.pref-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted2);
+}
+
 .ex-row {
   display: grid;
   grid-template-columns: 44px minmax(180px, 1fr) auto auto;
@@ -344,7 +476,6 @@ body::before {
   gap: 0 14px;
   padding: 18px 28px;
   border-bottom: 1px solid var(--border);
-  cursor: pointer;
   transition: background 0.1s;
   animation: slideIn 0.25s ease both;
   position: relative;
@@ -396,6 +527,12 @@ body::before {
   white-space: nowrap;
 }
 
+.ex-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .ex-complete-btn {
   font-family: 'Share Tech Mono', monospace;
   font-size: 9px;
@@ -416,6 +553,22 @@ body::before {
   color: var(--accent);
   border-color: rgba(var(--accent-rgb),0.5);
   background: rgba(var(--accent-rgb),0.08);
+}
+
+.ex-details-btn {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #7ad8ff;
+  border: 1px solid rgba(122,216,255,0.4);
+  background: rgba(122,216,255,0.08);
+  padding: 8px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ex-details-btn:hover {
+  background: rgba(122,216,255,0.17);
 }
 
 /* ── SIDEBAR ────────────────────────────── */
@@ -474,9 +627,16 @@ body::before {
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
+  border-left: none;
+  border-right: none;
+  border-top: none;
   cursor: pointer;
   transition: background 0.1s;
   position: relative;
+  width: 100%;
+  background: transparent;
+  text-align: left;
+  font: inherit;
 }
 .wi:hover { background: rgba(var(--accent-rgb),0.05); }
 .wi.active { background: rgba(var(--accent-rgb),0.08); }
@@ -581,6 +741,9 @@ body::before {
 }
 
 .rest-timer-widget.done {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: none;
   box-shadow: 0 0 12px rgba(var(--accent-rgb),0.22);
 }
 
@@ -645,6 +808,65 @@ body::before {
   background: var(--accent);
   box-shadow: 0 0 10px rgba(var(--accent-rgb),0.85);
   transition: width 0.16s linear;
+}
+
+/* ── MOBILE SESSION DOCK ────────────────── */
+.session-dock {
+  display: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 210;
+  padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid rgba(var(--accent-rgb),0.45);
+  background:
+    linear-gradient(180deg, rgba(var(--accent-rgb),0.16), rgba(8,8,8,0.96) 35%),
+    rgba(8,8,8,0.94);
+  backdrop-filter: blur(10px);
+}
+
+.session-dock-meta {
+  font-size: 8px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-shadow: 0 0 10px rgba(var(--accent-rgb),0.55);
+  margin-bottom: 8px;
+}
+
+.session-dock-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.dock-btn {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: var(--muted2);
+  border: 1px solid var(--border);
+  background: rgba(15,15,15,0.92);
+  padding: 9px 8px;
+  cursor: pointer;
+}
+
+.dock-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb),0.45);
+}
+
+.dock-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.dock-btn-primary {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb),0.5);
+  background: rgba(var(--accent-rgb),0.12);
 }
 
 /* ── MODAL ──────────────────────────────── */
@@ -728,6 +950,7 @@ body::before {
 .m-tag.core { border-color: rgba(100,180,255,0.25); color: #64b4ff; background: rgba(100,180,255,0.05); }
 .m-tag.cardio { border-color: rgba(255,140,80,0.25); color: #ff8c50; background: rgba(255,140,80,0.05); }
 .m-tag.done { border-color: rgba(var(--accent-rgb),0.5); color: var(--accent); background: rgba(var(--accent-rgb),0.12); }
+.m-ex.focused { background: rgba(var(--accent-rgb),0.12); }
 
 /* ══════════════════════════════════════════
    MOBILE — full rethink for phone legibility
@@ -825,12 +1048,13 @@ body::before {
     display: none;
   }
 
-  .bottom-bar {
-    display: flex !important;
+  .session-dock {
+    display: block;
   }
 
   /* Day strip — bigger tap targets */
   .day-strip { display: none; } /* replaced by sidebar week-list on mobile */
+  .ex-panel { padding-bottom: 150px; }
 
   /* Exercises — big, legible */
   .ex-section-label {
@@ -842,6 +1066,7 @@ body::before {
   .day-controls { width: 100%; justify-content: space-between; gap: 8px; }
   .day-progress { font-size: 9px; letter-spacing: 1px; }
   .day-start-btn { font-size: 9px; padding: 7px 10px; }
+  .notes-panel { margin: 0 20px 10px; }
 
   .ex-row {
     grid-template-columns: 48px 1fr auto;
@@ -875,18 +1100,27 @@ body::before {
     color: var(--muted2);
     line-height: 1.65;
   }
-  .ex-complete-btn {
+  .ex-actions {
     grid-column: 3;
     grid-row: 2;
     align-self: end;
-    padding: 7px 9px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .ex-complete-btn, .ex-details-btn {
+    font-size: 8px;
+    padding: 7px 8px;
+    width: 100%;
   }
 
   /* Topbar */
   .tb-logo { padding: 0 18px; padding-right: 32px; }
   .tb-logo-text { font-size: 13px; letter-spacing: 3px; }
   .tb-item:nth-child(n+2) { display: none; }
-  .tb-status { padding: 0 16px; }
+  .tb-status { padding: 0 12px; gap: 6px; }
+  .status-dot, .status-txt { display: none; }
+  .network-status { font-size: 7px; padding: 4px 6px; }
+  .install-app-btn { font-size: 7px; padding: 5px 8px; }
 
   /* Modal */
   .modal {
@@ -918,9 +1152,15 @@ body::before {
     left: 10px;
     right: 10px;
     width: auto;
-    bottom: 92px;
+    bottom: 122px;
   }
   .rt-time { font-size: 28px; }
+
+  .ios-install-hint {
+    margin: 6px 10px 0;
+    padding: 8px 10px;
+  }
+  .ios-hint-text { font-size: 9px; }
 }
 
 @media (max-width: 400px) {
@@ -929,54 +1169,19 @@ body::before {
   .ex-name { font-size: 18px; }
   .ex-sets { font-size: 13px; }
   .day-progress { font-size: 8px; }
-  .ex-complete-btn { font-size: 8px; padding: 6px 8px; }
+  .notes-panel > summary { font-size: 8px; }
+  .ex-complete-btn, .ex-details-btn { font-size: 7px; padding: 6px 6px; }
   .rt-time { font-size: 24px; }
 }
 
-  /* ── BOTTOM STATS BAR (mobile only) ──── */
-  .bottom-bar {
-    display: none;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 100;
-    border-top: 2px solid var(--accent);
-    background: #0a0a0a;
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 
-  .bottom-bar-inner {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-  }
-
-  .bb-chip {
-    padding: 14px 16px 18px;
-    border-right: 1px solid var(--border);
-    text-align: center;
-  }
-  .bb-chip:last-child { border-right: none; }
-
-  .bb-label {
-    font-size: 9px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--muted2);
-    margin-bottom: 5px;
-  }
-
-  .bb-val {
-    font-family: 'Orbitron', sans-serif;
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--accent);
-    text-shadow:
-      0 0 12px rgba(var(--accent-rgb),0.55),
-      0 0 24px rgba(var(--accent-rgb),0.3);
-    line-height: 1;
-  }
-
-  /* push ex-panel content up so it doesn't hide behind bottom bar */
-  @media (max-width: 768px) {
-    .ex-panel { padding-bottom: 80px; }
-  }
+  .status-dot { animation: none !important; }
+  .rt-fill { transition: none !important; }
+}

@@ -3,7 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#00d9ff">
 <title>SPLIT.SYS</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;500;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -30,8 +33,15 @@
     <div class="tb-status">
       <div class="status-dot"></div>
       <span class="status-txt">ACTIVE</span>
+      <span class="network-status" id="network-status">ONLINE</span>
+      <button type="button" class="install-app-btn hidden" id="install-app-btn">INSTALL</button>
     </div>
   </nav>
+
+  <div class="ios-install-hint hidden" id="ios-install-hint">
+    <span class="ios-hint-text">On iPhone: Share <b>&rarr;</b> Add to Home Screen.</span>
+    <button type="button" class="ios-hint-close-btn" id="ios-hint-close-btn">OK</button>
+  </div>
 
   <main class="main">
     <div class="bg-text" id="bg-text">MONDAY</div>
@@ -90,11 +100,6 @@
 
 </div>
 
-<!-- BOTTOM BAR -->
-<div class="bottom-bar" id="bottom-bar">
-  <div class="bottom-bar-inner" id="bottom-bar-inner"></div>
-</div>
-
 <!-- REST TIMER -->
 <div class="rest-timer-widget" id="rest-timer-widget" aria-live="polite">
   <div class="rt-head">
@@ -103,6 +108,17 @@
   </div>
   <div class="rt-time" id="rest-time">00:00</div>
   <div class="rt-bar"><div class="rt-fill" id="rest-fill"></div></div>
+</div>
+
+<!-- MOBILE SESSION DOCK -->
+<div class="session-dock" id="session-dock">
+  <div class="session-dock-meta" id="dock-meta">0/0 DONE</div>
+  <div class="session-dock-actions">
+    <button type="button" class="dock-btn dock-btn-primary" id="dock-start-end-btn">START DAY</button>
+    <button type="button" class="dock-btn" id="dock-undo-btn">UNDO</button>
+    <button type="button" class="dock-btn" id="dock-plus-rest-btn">+30S REST</button>
+    <button type="button" class="dock-btn" id="dock-skip-rest-btn">SKIP REST</button>
+  </div>
 </div>
 
 <!-- MODAL -->
