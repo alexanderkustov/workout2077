@@ -78,6 +78,8 @@ const DAY_THEME_COLORS = [
 const REST_TIMER_DURATION_SEC = 90;
 const UNDO_WINDOW_MS = 5000;
 const IOS_HINT_DISMISSED_KEY = 'splitSysIosHintDismissedV1';
+const DAY_SWITCH_FADE_OUT_MS = 150;
+const DAY_SWITCH_FADE_IN_MS = 300;
 
 let appState = null;
 let active = 0;
@@ -87,12 +89,29 @@ let restTimerDoneUntil = 0;
 let undoExpiryTimeout = null;
 let deferredInstallPrompt = null;
 let audioCtx = null;
+let daySwitchSwapTimeout = null;
+let daySwitchClearTimeout = null;
 
 function clampDayIndex(idx) {
   if (!Number.isFinite(idx)) return 0;
   if (idx < 0) return 0;
   if (idx > DAYS.length - 1) return DAYS.length - 1;
   return idx;
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function clearDaySwitchTransitionTimers() {
+  if (daySwitchSwapTimeout) {
+    clearTimeout(daySwitchSwapTimeout);
+    daySwitchSwapTimeout = null;
+  }
+  if (daySwitchClearTimeout) {
+    clearTimeout(daySwitchClearTimeout);
+    daySwitchClearTimeout = null;
+  }
 }
 
 function hexToRgb(hex) {
@@ -516,8 +535,34 @@ function startDay(dayIdx) {
 }
 
 function switchDay(dayIdx) {
-  setActiveDay(dayIdx);
-  render(active);
+  const targetDay = clampDayIndex(dayIdx);
+  if (targetDay === active) return;
+
+  if (prefersReducedMotion()) {
+    setActiveDay(targetDay);
+    render(active);
+    return;
+  }
+
+  clearDaySwitchTransitionTimers();
+  document.body.classList.remove('theme-fade-in');
+  void document.body.offsetWidth;
+  document.body.classList.add('theme-fade-out');
+
+  daySwitchSwapTimeout = setTimeout(() => {
+    setActiveDay(targetDay);
+    render(active);
+
+    document.body.classList.remove('theme-fade-out');
+    document.body.classList.add('theme-fade-in');
+
+    daySwitchClearTimeout = setTimeout(() => {
+      document.body.classList.remove('theme-fade-in');
+      daySwitchClearTimeout = null;
+    }, DAY_SWITCH_FADE_IN_MS);
+
+    daySwitchSwapTimeout = null;
+  }, DAY_SWITCH_FADE_OUT_MS);
 }
 
 function setDayNotes(dayIdx, notes) {
@@ -549,25 +594,38 @@ function tagEl(t) {
 }
 
 function openModal(dayIdx, focusExerciseIdx = null) {
-  const d = DAYS[dayIdx];
-  const dayState = getDayState(dayIdx);
+  const safeDayIdx = clampDayIndex(dayIdx);
+  const d = DAYS[safeDayIdx];
+  const dayState = getDayState(safeDayIdx);
+  const exIdx = Number.isInteger(focusExerciseIdx) ? Math.max(0, Math.min(d.ex.length - 1, focusExerciseIdx)) : 0;
+  const ex = d.ex[exIdx];
+  const doneTag = dayState.completed[exIdx] ? '<span class="m-tag done">DONE</span>' : tagEl(ex.t);
 
-  document.getElementById('mh-sys').textContent = `// WORKOUT LOG \u2014 ${d.idx}`;
-  document.getElementById('mh-name').textContent = d.name;
+  document.getElementById('mh-sys').textContent = `// EXERCISE DETAILS \u2014 ${d.idx} / EX ${String(exIdx + 1).padStart(2, '0')}`;
+  document.getElementById('mh-name').textContent = ex.n;
   document.getElementById('mh-cat').textContent = d.cat;
 
-  document.getElementById('modal-body').innerHTML = d.ex.map((e, i) => {
-    const doneTag = dayState.completed[i] ? '<span class="m-tag done">DONE</span>' : tagEl(e.t);
-    const focused = focusExerciseIdx === i ? ' focused' : '';
-    return `<div class="m-ex${focused}">
-      <div class="m-num">${String(i + 1).padStart(2, '0')}</div>
-      <div>
-        <div class="m-name">${escapeHtml(e.n)}</div>
-        <div class="m-sets">${escapeHtml(e.s)}</div>
+  document.getElementById('modal-body').innerHTML = `
+    <div class="m-detail">
+      <div class="m-detail-media" role="img" aria-label="Exercise image placeholder">
+        <div class="m-detail-media-label">IMAGE PLACEHOLDER</div>
       </div>
-      ${doneTag}
-    </div>`;
-  }).join('');
+      <div class="m-detail-meta">
+        <div class="m-detail-row">
+          <span class="m-detail-label">Sets / Reps</span>
+          <span class="m-detail-value">${escapeHtml(ex.s)}</span>
+        </div>
+        <div class="m-detail-row">
+          <span class="m-detail-label">Tag</span>
+          <span class="m-detail-tags">${doneTag || '<span class="m-tag">LIFT</span>'}</span>
+        </div>
+      </div>
+      <div class="m-detail-copy">
+        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
+        <p>Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit.</p>
+      </div>
+    </div>
+  `;
 
   document.getElementById('modal-bg').classList.add('open');
   document.body.style.overflow = 'hidden';
