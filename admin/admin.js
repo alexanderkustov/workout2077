@@ -71,6 +71,7 @@ const BUILTIN_RAW_DAYS = [
 
 let routineState = { version: ROUTINE_PROFILE_VERSION, days: [] };
 let selectedNode = { type: 'root', dayIdx: null, exIdx: null };
+let dragState = null;
 
 function dayIndexLabel(dayIdx) {
   return `DAY ${String(dayIdx + 1).padStart(2, '0')}`;
@@ -309,7 +310,7 @@ function renderGraph() {
         <div class="exercise-list">
           ${day.ex.map((exercise, exIdx) => `
             <div class="exercise-item">
-              <button type="button" class="json-node exercise-node ${isSelectedExercise(dayIdx, exIdx) ? 'selected' : ''}" data-action="select-exercise" data-day-idx="${dayIdx}" data-ex-idx="${exIdx}">
+              <button type="button" class="json-node exercise-node ${isSelectedExercise(dayIdx, exIdx) ? 'selected' : ''}" draggable="true" data-action="select-exercise" data-day-idx="${dayIdx}" data-ex-idx="${exIdx}">
                 <span class="node-k">ex[${exIdx + 1}] ${escapeHtml(exercise.t || 'lift')}</span>
                 <span class="node-v">${escapeHtml(exercise.n)}</span>
                 <span class="node-meta">${escapeHtml(exercise.s)}</span>
@@ -317,6 +318,7 @@ function renderGraph() {
             </div>
           `).join('')}
         </div>
+        <div class="exercise-drop-tail" data-day-idx="${dayIdx}">Drop Here To Move Exercise To End</div>
       </section>
     `).join('')}
   `;
@@ -384,6 +386,137 @@ function removeExercise(dayIdx, exIdx) {
   syncRawEditor();
   renderDayPreview(routineState.days);
   setStatus(`Removed exercise from day ${dayIdx + 1}.`, 'success');
+}
+
+function clearGraphDragUi() {
+  const canvas = document.getElementById('graph-canvas');
+  if (!canvas) return;
+  canvas.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+  canvas.querySelectorAll('.drag-source').forEach(el => el.classList.remove('drag-source'));
+}
+
+function clearDragState() {
+  clearGraphDragUi();
+  dragState = null;
+}
+
+function getDropTargetFromEvent(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) return null;
+
+  const exNode = target.closest('.exercise-node');
+  if (exNode) {
+    return {
+      kind: 'exercise',
+      dayIdx: Number(exNode.dataset.dayIdx),
+      exIdx: Number(exNode.dataset.exIdx),
+      element: exNode,
+    };
+  }
+
+  const tail = target.closest('.exercise-drop-tail');
+  if (tail) {
+    return {
+      kind: 'tail',
+      dayIdx: Number(tail.dataset.dayIdx),
+      exIdx: null,
+      element: tail,
+    };
+  }
+
+  return null;
+}
+
+function isValidExerciseMoveTarget(source, target) {
+  if (!source || !target) return false;
+  if (!Number.isInteger(source.dayIdx) || !Number.isInteger(source.exIdx)) return false;
+  if (!Number.isInteger(target.dayIdx)) return false;
+
+  const sourceDay = routineState.days[source.dayIdx];
+  const destDay = routineState.days[target.dayIdx];
+  if (!sourceDay || !destDay || !sourceDay.ex[source.exIdx]) return false;
+
+  if (target.kind === 'exercise') {
+    if (!Number.isInteger(target.exIdx) || !destDay.ex[target.exIdx]) return false;
+    if (source.dayIdx === target.dayIdx && source.exIdx === target.exIdx) return false;
+  }
+
+  if (target.kind === 'tail') {
+    if (source.dayIdx === target.dayIdx && source.exIdx === sourceDay.ex.length - 1) return false;
+  }
+
+  if (source.dayIdx !== target.dayIdx && sourceDay.ex.length <= 1) return false;
+  return true;
+}
+
+function moveExerciseToDropTarget(source, target) {
+  if (!isValidExerciseMoveTarget(source, target)) {
+    setStatus('Cannot move this exercise to that position.', 'error');
+    return;
+  }
+
+  const sourceDay = routineState.days[source.dayIdx];
+  const destDay = routineState.days[target.dayIdx];
+  let insertIdx = target.kind === 'tail' ? destDay.ex.length : target.exIdx;
+
+  const [movedExercise] = sourceDay.ex.splice(source.exIdx, 1);
+  if (!movedExercise) return;
+
+  if (source.dayIdx === target.dayIdx && source.exIdx < insertIdx) {
+    insertIdx -= 1;
+  }
+
+  insertIdx = Math.max(0, Math.min(insertIdx, destDay.ex.length));
+  destDay.ex.splice(insertIdx, 0, movedExercise);
+
+  selectedNode = { type: 'exercise', dayIdx: target.dayIdx, exIdx: insertIdx };
+  clearDragState();
+  renderGraph();
+  renderInspector();
+  syncRawEditor();
+  renderDayPreview(routineState.days);
+  setStatus(`Moved exercise to day ${target.dayIdx + 1}.`, 'success');
+}
+
+function onGraphDragStart(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const node = target.closest('.exercise-node');
+  if (!node) return;
+
+  const dayIdx = Number(node.dataset.dayIdx);
+  const exIdx = Number(node.dataset.exIdx);
+  if (!Number.isInteger(dayIdx) || !Number.isInteger(exIdx)) return;
+
+  dragState = { dayIdx, exIdx };
+  node.classList.add('drag-source');
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', `${dayIdx}:${exIdx}`);
+  }
+}
+
+function onGraphDragOver(event) {
+  if (!dragState) return;
+  const target = getDropTargetFromEvent(event);
+  if (!target || !isValidExerciseMoveTarget(dragState, target)) return;
+
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  clearGraphDragUi();
+  target.element.classList.add('drag-over');
+}
+
+function onGraphDrop(event) {
+  if (!dragState) return;
+  const target = getDropTargetFromEvent(event);
+  if (!target) return;
+  event.preventDefault();
+  moveExerciseToDropTarget(dragState, target);
+}
+
+function onGraphDragEnd() {
+  clearDragState();
 }
 
 function renderRootInspector(container) {
@@ -756,7 +889,16 @@ function bindToolbar() {
   if (saveBtn) saveBtn.addEventListener('click', () => withErrorGuard(saveRoutineToStorage));
   if (clearBtn) clearBtn.addEventListener('click', () => withErrorGuard(clearCustomRoutine));
   if (applyJsonBtn) applyJsonBtn.addEventListener('click', () => withErrorGuard(applyRawEditorPayload));
-  if (graphCanvas) graphCanvas.addEventListener('click', onGraphClick);
+  if (graphCanvas) {
+    graphCanvas.addEventListener('click', onGraphClick);
+    graphCanvas.addEventListener('dragstart', onGraphDragStart);
+    graphCanvas.addEventListener('dragover', onGraphDragOver);
+    graphCanvas.addEventListener('drop', onGraphDrop);
+    graphCanvas.addEventListener('dragend', onGraphDragEnd);
+    graphCanvas.addEventListener('dragleave', () => {
+      if (!dragState) clearGraphDragUi();
+    });
+  }
 }
 
 function withErrorGuard(action) {

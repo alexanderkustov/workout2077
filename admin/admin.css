@@ -322,6 +322,39 @@ body {
   font-size: 8px;
 }
 
+.exercise-node[draggable='true'] {
+  cursor: grab;
+}
+
+.exercise-node.drag-source {
+  opacity: 0.45;
+  border-style: dashed;
+}
+
+.exercise-node.drag-over {
+  border-color: rgba(var(--accent-rgb), 0.78);
+  background: rgba(var(--accent-rgb), 0.2);
+}
+
+.exercise-drop-tail {
+  margin-left: 16px;
+  border: 1px dashed rgba(var(--accent-rgb), 0.28);
+  background: rgba(var(--accent-rgb), 0.05);
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 8px 10px;
+  text-align: center;
+  user-select: none;
+}
+
+.exercise-drop-tail.drag-over {
+  border-color: rgba(var(--accent-rgb), 0.78);
+  background: rgba(var(--accent-rgb), 0.18);
+  color: var(--accent);
+}
+
 .inspector-body {
   padding: 12px;
   overflow: auto;

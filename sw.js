@@ -2,7 +2,10 @@ const CACHE_NAME = 'split-sys-app-shell-v4';
 const APP_SHELL = [
   './',
   './index.html',
+  './404.html',
+  './500.html',
   './styles.css',
+  './error.css',
   './script.js',
   './admin/index.html',
   './admin/admin.css',
