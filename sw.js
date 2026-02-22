@@ -1,9 +1,12 @@
-const CACHE_NAME = 'split-sys-app-shell-v3';
+const CACHE_NAME = 'split-sys-app-shell-v4';
 const APP_SHELL = [
   './',
   './index.html',
   './styles.css',
   './script.js',
+  './admin/index.html',
+  './admin/admin.css',
+  './admin/admin.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -25,12 +28,15 @@ self.addEventListener('activate', event => {
 
 async function networkFirst(request) {
   const cache = await caches.open(CACHE_NAME);
+  const url = new URL(request.url);
+  const isAdminPage = url.pathname.endsWith('/admin') || url.pathname.endsWith('/admin/') || url.pathname.includes('/admin/');
+  const fallbackDoc = isAdminPage ? './admin/index.html' : './index.html';
   try {
     const fresh = await fetch(request);
     if (fresh && fresh.ok) cache.put(request, fresh.clone());
     return fresh;
   } catch {
-    const cached = await cache.match(request, { ignoreSearch: true }) || await cache.match('./index.html');
+    const cached = await cache.match(request, { ignoreSearch: true }) || await cache.match(fallbackDoc);
     if (cached) return cached;
     throw new Error('offline');
   }

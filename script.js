@@ -1,6 +1,6 @@
 /*
 Exercise schema (advanced):
-{ n, s, t?, p?: { sets: [{ load?: string, reps: { min?: number, max?: number, target: number } }] } }
+{ n, s, t?, d?, p?: { sets: [{ load?: string, reps: { min?: number, max?: number, target: number } }] } }
 */
 const BUILTIN_RAW_DAYS = [
   { name:'Monday', short:'Mon', cat:'Upper Body', idx:'DAY 01', sets:32, dur:'80 min',
@@ -288,11 +288,17 @@ function normalizeExerciseSchema(rawExercise) {
   const name = typeof exercise.n === 'string' ? exercise.n : 'Exercise';
   const summary = typeof exercise.s === 'string' ? exercise.s : '';
   const tag = typeof exercise.t === 'string' ? exercise.t : '';
+  const description = typeof exercise.d === 'string'
+    ? exercise.d
+    : typeof exercise.desc === 'string'
+      ? exercise.desc
+      : '';
 
   return {
     n: name,
     s: summary,
     t: tag,
+    d: description,
     p: normalizeExercisePlan(exercise.p, summary),
   };
 }
@@ -361,6 +367,7 @@ function sanitizeRoutineProfile(rawProfile) {
         n: exercise.n,
         s: exercise.s,
         t: exercise.t,
+        d: exercise.d,
         p: exercise.p,
       })),
     })),
@@ -1553,6 +1560,69 @@ function tagEl(t) {
   return `<span class="m-tag ${cls}">${lbl}</span>`;
 }
 
+function renderExerciseDescriptionHtml(description) {
+  const source = typeof description === 'string' ? description.trim() : '';
+  if (!source) {
+    return '<p>No custom description yet. Add "d" in /admin to include cues or movement notes.</p>';
+  }
+
+  const chunks = source.split(/\n{2,}/).map(chunk => chunk.trim()).filter(Boolean);
+  const safeChunks = (chunks.length > 0 ? chunks : [source]).map(chunk => escapeHtml(chunk).replace(/\n/g, '<br>'));
+  return safeChunks.map(chunk => `<p>${chunk}</p>`).join('');
+}
+
+function isDayPickerOpen() {
+  const picker = document.getElementById('day-picker-bg');
+  return Boolean(picker && picker.classList.contains('open'));
+}
+
+function openDayPicker(defaultDayIdx = active) {
+  const picker = document.getElementById('day-picker-bg');
+  if (!picker) {
+    setActiveDay(defaultDayIdx);
+    render(active, { animateRows: true });
+    return;
+  }
+
+  const safeDayIdx = clampDayIndex(defaultDayIdx);
+  const buttons = Array.from(picker.querySelectorAll('.day-pick-btn'));
+  buttons.forEach(btn => {
+    const idx = clampDayIndex(Number(btn.dataset.day));
+    const dayInfo = DAYS[idx];
+    const dayNumEl = btn.querySelector('.day-pick-num');
+    const dayMainEl = btn.querySelector('.day-pick-main');
+    const dayCatEl = btn.querySelector('.day-pick-cat');
+    if (dayNumEl) dayNumEl.textContent = `DAY ${idx + 1}`;
+    if (dayMainEl) dayMainEl.textContent = String(dayInfo?.cat || 'Workout').toUpperCase();
+    if (dayCatEl) dayCatEl.textContent = String(dayInfo?.name || `Day ${idx + 1}`);
+    btn.setAttribute('aria-label', `Select day ${idx + 1} ${dayInfo?.name || ''} ${dayInfo?.cat || ''}`.trim());
+    btn.classList.toggle('active', idx === safeDayIdx);
+  });
+
+  picker.classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  const focusBtn = picker.querySelector(`.day-pick-btn[data-day="${safeDayIdx}"]`) || picker.querySelector('.day-pick-btn');
+  if (focusBtn instanceof HTMLElement) focusBtn.focus();
+}
+
+function closeDayPicker() {
+  const picker = document.getElementById('day-picker-bg');
+  if (picker) picker.classList.remove('open');
+
+  const modal = document.getElementById('modal-bg');
+  if (!modal || !modal.classList.contains('open')) {
+    document.body.style.overflow = '';
+  }
+}
+
+function chooseDayFromPicker(dayIdx) {
+  const safeDayIdx = clampDayIndex(dayIdx);
+  closeDayPicker();
+  setActiveDay(safeDayIdx);
+  render(active, { animateRows: true });
+}
+
 function openModal(dayIdx, focusExerciseIdx = null) {
   const safeDayIdx = clampDayIndex(dayIdx);
   const d = DAYS[safeDayIdx];
@@ -1561,6 +1631,7 @@ function openModal(dayIdx, focusExerciseIdx = null) {
   const ex = d.ex[exIdx];
   const progress = getExerciseProgress(dayState, safeDayIdx, exIdx);
   const doneTag = dayState.completed[exIdx] ? '<span class="m-tag done">DONE</span>' : tagEl(ex.t);
+  const descriptionHtml = renderExerciseDescriptionHtml(ex.d);
 
   document.getElementById('mh-sys').textContent = `// EXERCISE DETAILS \u2014 ${d.idx} / EX ${String(exIdx + 1).padStart(2, '0')}`;
   document.getElementById('mh-name').textContent = ex.n;
@@ -1590,8 +1661,7 @@ function openModal(dayIdx, focusExerciseIdx = null) {
         </div>
       </div>
       <div class="m-detail-copy">
-        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>
-        <p>Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit.</p>
+        ${descriptionHtml}
       </div>
     </div>
   `;
@@ -1602,7 +1672,9 @@ function openModal(dayIdx, focusExerciseIdx = null) {
 
 function closeModal() {
   document.getElementById('modal-bg').classList.remove('open');
-  document.body.style.overflow = '';
+  if (!isDayPickerOpen()) {
+    document.body.style.overflow = '';
+  }
 }
 
 function clearProgress() {
@@ -1906,7 +1978,24 @@ function initGlobalHandlers() {
   document.getElementById('modal-bg').addEventListener('click', event => {
     if (event.target === document.getElementById('modal-bg')) closeModal();
   });
+
+  const dayPicker = document.getElementById('day-picker-bg');
+  if (dayPicker) {
+    dayPicker.addEventListener('click', event => {
+      const pickBtn = event.target instanceof Element ? event.target.closest('.day-pick-btn') : null;
+      if (!pickBtn) return;
+      const dayIdx = Number(pickBtn.dataset.day);
+      chooseDayFromPicker(dayIdx);
+    });
+  }
+
   document.addEventListener('keydown', event => {
+    if (isDayPickerOpen() && /^[1-7]$/.test(event.key)) {
+      event.preventDefault();
+      chooseDayFromPicker(Number(event.key) - 1);
+      return;
+    }
+
     if (event.key === 'Escape') closeModal();
   });
 
@@ -1942,11 +2031,8 @@ function initGlobalHandlers() {
 }
 
 function boot() {
-  const jsDayToIdx = { 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 0: 6 };
-  const defaultDay = jsDayToIdx[new Date().getDay()] ?? 0;
-
   initializeRoutineDays();
-  appState = loadAppState(defaultDay);
+  appState = loadAppState(0);
   active = clampDayIndex(appState.activeDay);
 
   saveAppState();
@@ -1956,7 +2042,7 @@ function boot() {
   initServiceWorker();
   updateNetworkStatus();
   scheduleUndoExpiry();
-  render(active, { animateRows: true });
+  openDayPicker(active);
 }
 
 boot();

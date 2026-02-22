@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#00d9ff">
+<title>SPLIT.SYS Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./admin.css">
+</head>
+<body>
+<div class="admin-shell">
+  <header class="admin-topbar">
+    <div class="admin-brand">
+      <div class="admin-kicker">SPLIT.SYS // ADMIN</div>
+      <h1 class="admin-title">Routine Visual Editor</h1>
+      <p class="admin-sub">JSON Crack style flow: click nodes, edit fields, save to localStorage.</p>
+    </div>
+    <a class="admin-back" href="../index.html">Back To Workout</a>
+  </header>
+
+  <main class="admin-main">
+    <section class="admin-editor-panel">
+      <div class="admin-toolbar">
+        <button type="button" class="admin-btn" id="load-current-btn">Load Current</button>
+        <button type="button" class="admin-btn" id="load-default-btn">Load Built-in</button>
+        <button type="button" class="admin-btn" id="validate-btn">Validate</button>
+        <button type="button" class="admin-btn admin-btn-primary" id="save-btn">Save To LocalStorage</button>
+        <button type="button" class="admin-btn admin-btn-danger" id="clear-btn">Clear Custom Routine</button>
+      </div>
+
+      <div class="admin-workspace">
+        <div class="graph-pane">
+          <div class="pane-title">Routine Graph</div>
+          <div id="graph-canvas" class="graph-canvas" aria-live="polite"></div>
+        </div>
+        <div class="inspector-pane">
+          <div class="pane-title">Node Inspector</div>
+          <div id="inspector-body" class="inspector-body"></div>
+        </div>
+      </div>
+
+      <details class="raw-panel">
+        <summary>Advanced Raw JSON (optional)</summary>
+        <label class="admin-label" for="routine-json-input">Edit JSON directly, then apply to graph</label>
+        <textarea id="routine-json-input" class="admin-editor" spellcheck="false" aria-describedby="admin-status"></textarea>
+        <div class="raw-actions">
+          <button type="button" class="admin-btn" id="apply-json-btn">Apply JSON To Graph</button>
+        </div>
+      </details>
+
+      <div class="admin-status" id="admin-status" aria-live="polite">Ready.</div>
+    </section>
+
+    <aside class="admin-side-panel">
+      <div class="panel-block">
+        <h2>How To Edit</h2>
+        <ul>
+          <li>Click a Day node to edit category, duration, sets, and rest mode.</li>
+          <li>Click an Exercise node to edit name, summary, tag, and description.</li>
+          <li>Use + Exercise inside each Day branch to add exercises.</li>
+          <li>Save writes to localStorage key `splitSysRoutineProfileV1`.</li>
+        </ul>
+      </div>
+      <div class="panel-block">
+        <h2>Live Preview</h2>
+        <ul id="day-preview-list" class="day-preview-list"></ul>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<script src="./admin.js"></script>
+</body>
+</html>

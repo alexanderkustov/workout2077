@@ -1126,6 +1126,137 @@ summary:focus-visible,
   background: rgba(var(--accent-rgb),0.12);
 }
 
+/* ── STARTUP DAY PICKER ─────────────────── */
+.day-picker-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 430;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background:
+    radial-gradient(900px 500px at 50% -10%, rgba(var(--accent-rgb),0.2), transparent 62%),
+    rgba(0,0,0,0.92);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.day-picker-bg.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.day-picker {
+  width: min(560px, 94vw);
+  border: 1px solid rgba(var(--accent-rgb),0.58);
+  background:
+    linear-gradient(150deg, rgba(var(--accent-rgb),0.16), rgba(10,10,10,0.96) 52%),
+    rgba(10,10,10,0.96);
+  box-shadow:
+    0 0 30px rgba(var(--accent-rgb),0.38),
+    0 0 90px rgba(var(--accent-rgb),0.2);
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+}
+
+.day-picker-head {
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid rgba(var(--accent-rgb),0.3);
+}
+
+.day-picker-kicker {
+  font-size: 8px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(var(--accent-rgb),0.8);
+  margin-bottom: 6px;
+}
+
+.day-picker-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.day-picker-copy {
+  margin-top: 8px;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--muted2);
+}
+
+.day-picker-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 16px 20px 20px;
+  max-height: min(66vh, 620px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.day-pick-btn {
+  font-family: 'Share Tech Mono', monospace;
+  border: 1px solid var(--border);
+  background: rgba(12,12,12,0.94);
+  color: var(--text);
+  cursor: pointer;
+  padding: 12px 12px;
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  grid-template-areas:
+    'num main'
+    'num cat';
+  gap: 4px 12px;
+  align-items: center;
+  text-align: left;
+}
+
+.day-pick-btn:hover {
+  border-color: rgba(var(--accent-rgb),0.45);
+  background: rgba(var(--accent-rgb),0.12);
+}
+
+.day-pick-btn.active {
+  border-color: rgba(var(--accent-rgb),0.72);
+  background: rgba(var(--accent-rgb),0.2);
+  box-shadow: 0 0 14px rgba(var(--accent-rgb),0.34);
+}
+
+.day-pick-num {
+  grid-area: num;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 1.2px;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.day-pick-main {
+  grid-area: main;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 14px;
+  letter-spacing: 1.6px;
+  color: var(--text);
+  text-transform: uppercase;
+}
+
+.day-pick-cat {
+  grid-area: cat;
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--muted2);
+  line-height: 1.35;
+}
+
 /* ── MODAL ──────────────────────────────── */
 .modal-bg {
   position: fixed; inset: 0;
@@ -1422,6 +1553,50 @@ summary:focus-visible,
     display: block;
   }
 
+  .day-picker-bg {
+    padding: 14px;
+  }
+
+  .day-picker {
+    width: min(560px, 96vw);
+    clip-path: none;
+    border-radius: 8px;
+  }
+
+  .day-picker-head {
+    padding: 16px 16px 14px;
+  }
+
+  .day-picker-title {
+    font-size: 20px;
+  }
+
+  .day-picker-grid {
+    gap: 8px;
+    padding: 14px 14px 16px;
+    max-height: min(72vh, 640px);
+  }
+
+  .day-pick-btn {
+    padding: 10px 10px;
+    grid-template-columns: 70px 1fr;
+    gap: 3px 10px;
+  }
+
+  .day-pick-num {
+    font-size: 11px;
+  }
+
+  .day-pick-main {
+    font-size: 12px;
+    letter-spacing: 1.2px;
+  }
+
+  .day-pick-cat {
+    font-size: 8px;
+    letter-spacing: 1px;
+  }
+
   /* Day strip — bigger tap targets */
   .day-strip { display: none; } /* replaced by sidebar week-list on mobile */
   .ex-panel { padding-bottom: 150px; }
@@ -1568,6 +1743,7 @@ summary:focus-visible,
 }
 
 @media (max-width: 400px) {
+  .day-picker-grid { max-height: min(74vh, 680px); }
   .hero-name { font-size: 28px; }
   .hchip-val { font-size: 15px; }
   .ex-name { font-size: 18px; }

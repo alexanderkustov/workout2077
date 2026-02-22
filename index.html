@@ -95,6 +95,7 @@
       <div class="sb-routine-wrap">
         <button type="button" class="sb-clear-btn sb-routine-btn" id="import-csv-btn">Import CSV</button>
         <button type="button" class="sb-clear-btn sb-routine-btn" id="reset-default-routine-btn">Reset Routine</button>
+        <button type="button" class="sb-clear-btn sb-routine-btn" onclick="location.href='./admin/'">Routine Admin</button>
         <input type="file" id="routine-csv-input" class="routine-csv-input" accept=".csv,text/csv">
         <div class="routine-feedback" id="routine-feedback" aria-live="polite"></div>
       </div>
@@ -139,6 +140,26 @@
       <button class="modal-close" id="modal-close">&times;</button>
     </div>
     <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<!-- STARTUP DAY PICKER -->
+<div class="day-picker-bg" id="day-picker-bg" role="dialog" aria-modal="true" aria-labelledby="day-picker-title">
+  <div class="day-picker">
+    <div class="day-picker-head">
+      <div class="day-picker-kicker">// START SESSION</div>
+      <h2 class="day-picker-title" id="day-picker-title">Select Day For Today</h2>
+      <p class="day-picker-copy">Choose day 1 to 7, then load that workout.</p>
+    </div>
+    <div class="day-picker-grid">
+      <button type="button" class="day-pick-btn" data-day="0"><span class="day-pick-num">DAY 1</span><span class="day-pick-main">UPPER BODY</span><span class="day-pick-cat">MONDAY</span></button>
+      <button type="button" class="day-pick-btn" data-day="1"><span class="day-pick-num">DAY 2</span><span class="day-pick-main">LOWER BODY</span><span class="day-pick-cat">TUESDAY</span></button>
+      <button type="button" class="day-pick-btn" data-day="2"><span class="day-pick-num">DAY 3</span><span class="day-pick-main">PULL - BACK & BICEPS</span><span class="day-pick-cat">WEDNESDAY</span></button>
+      <button type="button" class="day-pick-btn" data-day="3"><span class="day-pick-num">DAY 4</span><span class="day-pick-main">DELTS + ARMS</span><span class="day-pick-cat">THURSDAY</span></button>
+      <button type="button" class="day-pick-btn" data-day="4"><span class="day-pick-num">DAY 5</span><span class="day-pick-main">POSTERIOR CHAIN + CORE</span><span class="day-pick-cat">FRIDAY</span></button>
+      <button type="button" class="day-pick-btn" data-day="5"><span class="day-pick-num">DAY 6</span><span class="day-pick-main">CARDIO</span><span class="day-pick-cat">SATURDAY</span></button>
+      <button type="button" class="day-pick-btn" data-day="6"><span class="day-pick-num">DAY 7</span><span class="day-pick-main">REST DAY</span><span class="day-pick-cat">SUNDAY</span></button>
+    </div>
   </div>
 </div>
 
