@@ -1,4 +1,8 @@
-const DAYS = [
+/*
+Exercise schema (advanced):
+{ n, s, t?, p?: { sets: [{ load?: string, reps: { min?: number, max?: number, target: number } }] } }
+*/
+const RAW_DAYS = [
   { name:'Monday', short:'Mon', cat:'Upper Body', idx:'DAY 01', sets:32, dur:'80 min',
     ex:[
       {n:'Flat Barbell Bench Press', s:'60 / 80 / 90 / 95 kg \u00d7 6\u20138 reps', t:''},
@@ -64,8 +68,12 @@ const DAYS = [
     ex:[{n:'Rest & Recovery', s:'Full day off \u2014 sleep, eat, recover', t:''}]},
 ];
 
+// `normalizeDaySchema` upgrades legacy shorthand into structured per-set rep targets.
+const DAYS = RAW_DAYS.map(normalizeDaySchema);
+
 const STORAGE_KEY = 'splitSysAppStateV2';
 const OLD_STORAGE_KEY = 'splitSysWorkoutStateV1';
+const APP_STATE_VERSION = 3;
 const DAY_THEME_COLORS = [
   '#00d9ff',
   '#ff2bd6',
@@ -80,6 +88,7 @@ const UNDO_WINDOW_MS = 5000;
 const IOS_HINT_DISMISSED_KEY = 'splitSysIosHintDismissedV1';
 const DAY_SWITCH_FADE_OUT_MS = 150;
 const DAY_SWITCH_FADE_IN_MS = 300;
+const SET_FILL_ANIM_WINDOW_MS = 900;
 
 let appState = null;
 let active = 0;
@@ -91,6 +100,7 @@ let deferredInstallPrompt = null;
 let audioCtx = null;
 let daySwitchSwapTimeout = null;
 let daySwitchClearTimeout = null;
+let pendingSetFillAnim = null;
 
 function clampDayIndex(idx) {
   if (!Number.isFinite(idx)) return 0;
@@ -126,6 +136,180 @@ function hexToRgb(hex) {
   };
 }
 
+function normalizeDashText(raw) {
+  return String(raw || '').replaceAll('\u2013', '-').replaceAll('\u2014', '-');
+}
+
+function toPositiveInt(value, fallback = 1) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return fallback;
+  return Math.round(num);
+}
+
+function parseRepRange(rawRepText) {
+  const text = normalizeDashText(rawRepText).toLowerCase();
+  const isTimed = /(sec|min|minute|minutes|hour|hours)/.test(text) && !/rep/.test(text);
+  if (isTimed) return { target: 1, min: null, max: null };
+
+  const rangeMatch = text.match(/(\d+)\s*-\s*(\d+)/);
+  if (rangeMatch) {
+    const min = toPositiveInt(rangeMatch[1], 1);
+    const max = Math.max(min, toPositiveInt(rangeMatch[2], min));
+    return { target: max, min, max };
+  }
+
+  const singleMatch = text.match(/(\d+)/);
+  if (singleMatch) {
+    const val = toPositiveInt(singleMatch[1], 1);
+    return { target: val, min: val, max: val };
+  }
+
+  return { target: 1, min: null, max: null };
+}
+
+function parseLoadSequence(rawLeftText) {
+  const left = normalizeDashText(rawLeftText).trim().toLowerCase();
+  if (!left.includes('/')) return [];
+
+  const unitMatch = left.match(/\b(kg|kgs|lb|lbs)\b/);
+  const unit = unitMatch ? unitMatch[1].replace('kgs', 'kg').replace('lbs', 'lb') : '';
+  const parts = left.split('/').map(part => part.trim()).filter(Boolean);
+  if (parts.length < 2) return [];
+
+  const loads = parts.map(part => {
+    const numMatch = part.match(/-?\d+(?:\.\d+)?/);
+    if (!numMatch) return null;
+    const base = numMatch[0];
+    return unit ? `${base} ${unit}` : base;
+  });
+
+  if (loads.some(load => !load)) return [];
+  return loads;
+}
+
+function inferExercisePlan(summaryText) {
+  const summary = String(summaryText || '').trim();
+  const splitParts = summary.split('×');
+  const hasMultiplier = splitParts.length > 1;
+  const left = hasMultiplier ? splitParts[0] : '';
+  const right = hasMultiplier ? splitParts.slice(1).join('×') : summary;
+  const repMeta = parseRepRange(right);
+  let sets = [];
+
+  if (hasMultiplier) {
+    const loads = parseLoadSequence(left);
+    if (loads.length > 0) {
+      sets = loads.map(load => ({ load, reps: { ...repMeta } }));
+    } else {
+      const countMatch = normalizeDashText(left).match(/(\d+)/);
+      const setCount = toPositiveInt(countMatch ? countMatch[1] : 1, 1);
+      sets = Array.from({ length: setCount }, () => ({ load: null, reps: { ...repMeta } }));
+    }
+  } else {
+    sets = [{ load: null, reps: { ...repMeta } }];
+  }
+
+  if (sets.length === 0) sets = [{ load: null, reps: { target: 1, min: null, max: null } }];
+  return { sets };
+}
+
+function normalizePlanSet(rawSet, fallbackSet) {
+  const fallback = fallbackSet || { load: null, reps: { target: 1, min: null, max: null } };
+  const rawReps = rawSet && typeof rawSet.reps === 'object' ? rawSet.reps : {};
+
+  const target = toPositiveInt(
+    rawSet?.targetReps ?? rawReps.target ?? rawReps.max ?? fallback.reps.target,
+    fallback.reps.target,
+  );
+
+  const minCandidate = rawReps.min ?? rawSet?.minReps;
+  const minNum = Number(minCandidate);
+  const min = Number.isFinite(minNum) && minNum > 0 ? Math.min(target, Math.round(minNum)) : fallback.reps.min;
+
+  const maxCandidate = rawReps.max ?? rawSet?.maxReps;
+  const maxNum = Number(maxCandidate);
+  const max = Number.isFinite(maxNum) && maxNum > 0
+    ? Math.max(target, Math.round(maxNum))
+    : fallback.reps.max && fallback.reps.max >= target
+      ? fallback.reps.max
+      : null;
+
+  const loadVal = typeof rawSet?.load === 'string' ? rawSet.load.trim() : fallback.load;
+  return {
+    load: loadVal || null,
+    reps: {
+      target,
+      min: min ?? null,
+      max: max ?? null,
+    },
+  };
+}
+
+function normalizeExercisePlan(rawPlan, summaryText) {
+  const inferred = inferExercisePlan(summaryText);
+  if (!rawPlan || typeof rawPlan !== 'object' || !Array.isArray(rawPlan.sets) || rawPlan.sets.length === 0) return inferred;
+
+  const sets = rawPlan.sets.map((set, idx) => {
+    const fallback = inferred.sets[Math.min(idx, inferred.sets.length - 1)];
+    return normalizePlanSet(set, fallback);
+  });
+
+  return {
+    sets: sets.length > 0 ? sets : inferred.sets,
+  };
+}
+
+function normalizeExerciseSchema(rawExercise) {
+  const exercise = rawExercise && typeof rawExercise === 'object' ? rawExercise : {};
+  const name = typeof exercise.n === 'string' ? exercise.n : 'Exercise';
+  const summary = typeof exercise.s === 'string' ? exercise.s : '';
+  const tag = typeof exercise.t === 'string' ? exercise.t : '';
+
+  return {
+    n: name,
+    s: summary,
+    t: tag,
+    p: normalizeExercisePlan(exercise.p, summary),
+  };
+}
+
+function normalizeDaySchema(rawDay) {
+  const day = rawDay && typeof rawDay === 'object' ? rawDay : {};
+  const exercises = Array.isArray(day.ex) ? day.ex.map(normalizeExerciseSchema) : [];
+  const inferredSets = exercises.reduce((sum, exercise) => sum + exercise.p.sets.length, 0);
+  const hasNumericSetCount = Number.isFinite(day.sets);
+  const setCount = day.sets === null
+    ? null
+    : hasNumericSetCount
+      ? Math.round(day.sets)
+      : day.rest
+        ? null
+        : inferredSets;
+
+  return {
+    name: typeof day.name === 'string' ? day.name : 'Day',
+    short: typeof day.short === 'string' ? day.short : '',
+    cat: typeof day.cat === 'string' ? day.cat : '',
+    idx: typeof day.idx === 'string' ? day.idx : '',
+    sets: setCount,
+    dur: typeof day.dur === 'string' ? day.dur : '\u2014',
+    rest: Boolean(day.rest),
+    ex: exercises,
+  };
+}
+
+function getExercisePlanSets(dayIdx, exIdx) {
+  const exercise = DAYS[dayIdx]?.ex?.[exIdx];
+  if (!exercise?.p?.sets || exercise.p.sets.length === 0) {
+    return [{ load: null, reps: { target: 1, min: null, max: null } }];
+  }
+  return exercise.p.sets;
+}
+
+function createEmptySetProgress(dayIdx, exIdx) {
+  return getExercisePlanSets(dayIdx, exIdx).map(() => ({ repsDone: 0, completedAt: null }));
+}
+
 function createEmptyDayState(dayIdx) {
   const exLen = DAYS[dayIdx].ex.length;
   return {
@@ -133,6 +317,7 @@ function createEmptyDayState(dayIdx) {
     startedAt: null,
     completed: Array.from({ length: exLen }, () => false),
     completedAt: Array.from({ length: exLen }, () => null),
+    setProgress: Array.from({ length: exLen }, (_, exIdx) => createEmptySetProgress(dayIdx, exIdx)),
     notes: '',
   };
 }
@@ -142,7 +327,7 @@ function createInitialAppState(defaultDayIdx) {
   for (let i = 0; i < DAYS.length; i += 1) days[String(i)] = createEmptyDayState(i);
 
   return {
-    version: 2,
+    version: APP_STATE_VERSION,
     activeDay: clampDayIndex(defaultDayIdx),
     days,
     rest: {
@@ -157,33 +342,79 @@ function createInitialAppState(defaultDayIdx) {
   };
 }
 
+function normalizeSetProgress(rawSetProgress, planSet) {
+  const raw = rawSetProgress && typeof rawSetProgress === 'object' ? rawSetProgress : {};
+  const target = planSet.reps.target;
+  const repsNum = Number(raw.repsDone);
+  let repsDone = Number.isFinite(repsNum) ? Math.max(0, Math.round(repsNum)) : 0;
+  if (raw.completed === true && repsDone < target) repsDone = target;
+  repsDone = Math.min(repsDone, target);
+
+  return {
+    repsDone,
+    completedAt: repsDone >= target && typeof raw.completedAt === 'string' ? raw.completedAt : null,
+  };
+}
+
 function normalizeDayState(rawDay, dayIdx) {
   const fallback = createEmptyDayState(dayIdx);
   if (!rawDay || typeof rawDay !== 'object') return fallback;
 
   const exLen = DAYS[dayIdx].ex.length;
-  const completed = Array.isArray(rawDay.completed)
+  const legacyCompleted = Array.isArray(rawDay.completed)
     ? rawDay.completed.slice(0, exLen).map(Boolean)
     : [];
-  while (completed.length < exLen) completed.push(false);
+  while (legacyCompleted.length < exLen) legacyCompleted.push(false);
 
-  const completedAt = Array.isArray(rawDay.completedAt)
-    ? rawDay.completedAt.slice(0, exLen).map((val, idx) => (completed[idx] ? (typeof val === 'string' ? val : null) : null))
+  const legacyCompletedAt = Array.isArray(rawDay.completedAt)
+    ? rawDay.completedAt.slice(0, exLen).map((val, idx) => (legacyCompleted[idx] ? (typeof val === 'string' ? val : null) : null))
     : [];
-  while (completedAt.length < exLen) completedAt.push(null);
+  while (legacyCompletedAt.length < exLen) legacyCompletedAt.push(null);
+
+  const rawSetProgress = Array.isArray(rawDay.setProgress) ? rawDay.setProgress : [];
+  const setProgress = Array.from({ length: exLen }, (_, exIdx) => {
+    const planSets = getExercisePlanSets(dayIdx, exIdx);
+    const rawExerciseProgress = Array.isArray(rawSetProgress[exIdx]) ? rawSetProgress[exIdx] : [];
+    let sets = planSets.map((planSet, setIdx) => normalizeSetProgress(rawExerciseProgress[setIdx], planSet));
+
+    if (legacyCompleted[exIdx]) {
+      const fallbackCompletedAt = legacyCompletedAt[exIdx];
+      sets = sets.map((setState, setIdx) => ({
+        repsDone: planSets[setIdx].reps.target,
+        completedAt: setState.completedAt || fallbackCompletedAt,
+      }));
+    }
+
+    return sets;
+  });
+
+  const completed = Array.from({ length: exLen }, (_, exIdx) => {
+    const planSets = getExercisePlanSets(dayIdx, exIdx);
+    return planSets.every((planSet, setIdx) => setProgress[exIdx][setIdx].repsDone >= planSet.reps.target);
+  });
+
+  const completedAt = Array.from({ length: exLen }, (_, exIdx) => {
+    if (!completed[exIdx]) return null;
+    if (legacyCompletedAt[exIdx]) return legacyCompletedAt[exIdx];
+    const completedSetTimes = setProgress[exIdx]
+      .map(setState => setState.completedAt)
+      .filter(val => typeof val === 'string');
+    return completedSetTimes.length > 0 ? completedSetTimes[completedSetTimes.length - 1] : null;
+  });
 
   return {
     started: Boolean(rawDay.started),
     startedAt: typeof rawDay.startedAt === 'string' ? rawDay.startedAt : null,
     completed,
     completedAt,
+    setProgress,
     notes: typeof rawDay.notes === 'string' ? rawDay.notes : '',
   };
 }
 
 function sanitizeAppState(raw, defaultDayIdx) {
   const base = createInitialAppState(defaultDayIdx);
-  if (!raw || typeof raw !== 'object' || raw.version !== 2) return base;
+  if (!raw || typeof raw !== 'object' || (raw.version !== 2 && raw.version !== APP_STATE_VERSION)) return base;
 
   const normalized = {
     ...base,
@@ -205,7 +436,12 @@ function sanitizeAppState(raw, defaultDayIdx) {
 
   const lu = raw.ui?.lastUndo;
   if (lu && Number.isInteger(lu.dayIdx) && Number.isInteger(lu.exIdx) && Number.isFinite(lu.at)) {
-    normalized.ui.lastUndo = { dayIdx: lu.dayIdx, exIdx: lu.exIdx, at: lu.at };
+    normalized.ui.lastUndo = {
+      dayIdx: lu.dayIdx,
+      exIdx: lu.exIdx,
+      setIdx: Number.isInteger(lu.setIdx) ? lu.setIdx : null,
+      at: lu.at,
+    };
   }
 
   return normalized;
@@ -230,11 +466,11 @@ function saveAppState() {
 
 function loadAppState(defaultDayIdx) {
   let parsed = null;
-  let hasV2 = false;
+  let hasStoredState = false;
 
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    hasV2 = Boolean(raw);
+    hasStoredState = Boolean(raw);
     parsed = raw ? JSON.parse(raw) : null;
   } catch {
     parsed = null;
@@ -242,7 +478,7 @@ function loadAppState(defaultDayIdx) {
 
   const state = sanitizeAppState(parsed, defaultDayIdx);
 
-  if (!hasV2) {
+  if (!hasStoredState) {
     try {
       localStorage.removeItem(OLD_STORAGE_KEY);
     } catch {
@@ -256,6 +492,7 @@ function loadAppState(defaultDayIdx) {
 function getDayState(dayIdx) {
   const key = String(dayIdx);
   if (!appState.days[key]) appState.days[key] = createEmptyDayState(dayIdx);
+  appState.days[key] = normalizeDayState(appState.days[key], dayIdx);
   return appState.days[key];
 }
 
@@ -267,6 +504,151 @@ function setActiveDay(dayIdx) {
 
 function doneCount(dayState) {
   return dayState.completed.filter(Boolean).length;
+}
+
+function ensureExerciseSetProgress(dayState, dayIdx, exIdx) {
+  const exLen = DAYS[dayIdx].ex.length;
+  if (!Array.isArray(dayState.setProgress)) {
+    dayState.setProgress = Array.from({ length: exLen }, (_, idx) => createEmptySetProgress(dayIdx, idx));
+  }
+  while (dayState.setProgress.length < exLen) {
+    dayState.setProgress.push(createEmptySetProgress(dayIdx, dayState.setProgress.length));
+  }
+
+  const planSets = getExercisePlanSets(dayIdx, exIdx);
+  const rawSets = Array.isArray(dayState.setProgress[exIdx]) ? dayState.setProgress[exIdx] : [];
+  const normalizedSets = planSets.map((planSet, setIdx) => normalizeSetProgress(rawSets[setIdx], planSet));
+  dayState.setProgress[exIdx] = normalizedSets;
+  return normalizedSets;
+}
+
+function getExerciseProgress(dayState, dayIdx, exIdx) {
+  const planSets = getExercisePlanSets(dayIdx, exIdx);
+  const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
+  let repsDoneTotal = 0;
+  let repsTargetTotal = 0;
+  let setsDone = 0;
+  let firstIncompleteSet = -1;
+
+  for (let i = 0; i < planSets.length; i += 1) {
+    const target = planSets[i].reps.target;
+    const repsDone = Math.min(target, setProgress[i].repsDone);
+    repsDoneTotal += repsDone;
+    repsTargetTotal += target;
+    if (repsDone >= target) {
+      setsDone += 1;
+    } else if (firstIncompleteSet === -1) {
+      firstIncompleteSet = i;
+    }
+  }
+
+  const allDone = setsDone === planSets.length;
+  const currentSetIdx = firstIncompleteSet === -1 ? planSets.length - 1 : firstIncompleteSet;
+  const currentSetTarget = planSets[currentSetIdx].reps.target;
+  const currentSetReps = Math.min(currentSetTarget, setProgress[currentSetIdx].repsDone);
+
+  return {
+    allDone,
+    setsDone,
+    setsTotal: planSets.length,
+    repsDoneTotal,
+    repsTargetTotal,
+    currentSetIdx,
+    currentSetTarget,
+    currentSetReps,
+  };
+}
+
+function markSetFillAnim(dayIdx, exIdx, setIdx, mode = 'on') {
+  pendingSetFillAnim = {
+    dayIdx,
+    exIdx,
+    setIdx,
+    mode: mode === 'off' ? 'off' : 'on',
+    at: Date.now(),
+  };
+}
+
+function consumeSetFillAnim(dayIdx, exIdx, setIdx) {
+  if (!pendingSetFillAnim) return null;
+  if (Date.now() - pendingSetFillAnim.at > SET_FILL_ANIM_WINDOW_MS) {
+    pendingSetFillAnim = null;
+    return null;
+  }
+
+  const match = pendingSetFillAnim.dayIdx === dayIdx
+    && pendingSetFillAnim.exIdx === exIdx
+    && pendingSetFillAnim.setIdx === setIdx;
+
+  if (!match) return null;
+
+  const mode = pendingSetFillAnim.mode === 'off' ? 'off' : 'on';
+  pendingSetFillAnim = null;
+  return mode;
+}
+
+function syncExerciseCompletionFromProgress(dayState, dayIdx, exIdx) {
+  const progress = getExerciseProgress(dayState, dayIdx, exIdx);
+  dayState.completed[exIdx] = progress.allDone;
+
+  if (!progress.allDone) {
+    dayState.completedAt[exIdx] = null;
+    return;
+  }
+
+  if (dayState.completedAt[exIdx]) return;
+  const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
+  const completedTimes = setProgress
+    .map(setState => setState.completedAt)
+    .filter(val => typeof val === 'string');
+  dayState.completedAt[exIdx] = completedTimes.length > 0 ? completedTimes[completedTimes.length - 1] : new Date().toISOString();
+}
+
+function resetExerciseProgress(dayState, dayIdx, exIdx) {
+  const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
+  for (let i = 0; i < setProgress.length; i += 1) {
+    setProgress[i].repsDone = 0;
+    setProgress[i].completedAt = null;
+  }
+  dayState.completed[exIdx] = false;
+  dayState.completedAt[exIdx] = null;
+}
+
+function fillExerciseProgressAsDone(dayState, dayIdx, exIdx, completedAt) {
+  const timestamp = completedAt || new Date().toISOString();
+  const planSets = getExercisePlanSets(dayIdx, exIdx);
+  const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
+
+  for (let i = 0; i < setProgress.length; i += 1) {
+    setProgress[i].repsDone = planSets[i].reps.target;
+    setProgress[i].completedAt = setProgress[i].completedAt || timestamp;
+  }
+
+  dayState.completed[exIdx] = true;
+  dayState.completedAt[exIdx] = timestamp;
+}
+
+function formatExerciseProgressLabel(progress) {
+  if (progress.allDone) return `SETS ${progress.setsTotal}/${progress.setsTotal} • COMPLETE`;
+  return `SETS ${progress.setsDone}/${progress.setsTotal} • NEXT ${progress.currentSetTarget} REPS`;
+}
+
+function formatExerciseSchemeLabel(dayIdx, exIdx) {
+  const sets = getExercisePlanSets(dayIdx, exIdx);
+  const highestTarget = sets.reduce((max, set) => Math.max(max, set.reps.target), 0);
+  const topLoad = [...sets].reverse().find(set => set.load)?.load || null;
+  return `${sets.length}×${highestTarget}${topLoad ? ` ${topLoad}` : ''}`;
+}
+
+function formatExercisePlanBreakdown(dayIdx, exIdx) {
+  const sets = getExercisePlanSets(dayIdx, exIdx);
+  return sets.map((set, idx) => {
+    const loadPrefix = set.load ? `${set.load} \u00d7 ` : '';
+    const repRange = set.reps.min && set.reps.max && set.reps.min !== set.reps.max
+      ? `${set.reps.min}\u2013${set.reps.max}`
+      : `${set.reps.target}`;
+    return `S${idx + 1}: ${loadPrefix}${repRange}`;
+  }).join(' \u2022 ');
 }
 
 function escapeHtml(str) {
@@ -312,8 +694,13 @@ function playBeep() {
   }
 }
 
-function setLastUndo(dayIdx, exIdx) {
-  appState.ui.lastUndo = { dayIdx, exIdx, at: Date.now() };
+function setLastUndo(dayIdx, exIdx, setIdx = null) {
+  appState.ui.lastUndo = {
+    dayIdx,
+    exIdx,
+    setIdx: Number.isInteger(setIdx) ? setIdx : null,
+    at: Date.now(),
+  };
   scheduleUndoExpiry();
 }
 
@@ -337,7 +724,21 @@ function canUndoLast() {
   }
 
   const dayState = getDayState(lu.dayIdx);
-  if (!dayState.completed[lu.exIdx]) {
+  if (Number.isInteger(lu.setIdx)) {
+    const planSets = getExercisePlanSets(lu.dayIdx, lu.exIdx);
+    if (lu.setIdx < 0 || lu.setIdx >= planSets.length) {
+      clearLastUndo();
+      saveAppState();
+      return false;
+    }
+
+    const setProgress = ensureExerciseSetProgress(dayState, lu.dayIdx, lu.exIdx);
+    if (setProgress[lu.setIdx].repsDone < planSets[lu.setIdx].reps.target) {
+      clearLastUndo();
+      saveAppState();
+      return false;
+    }
+  } else if (!dayState.completed[lu.exIdx]) {
     clearLastUndo();
     saveAppState();
     return false;
@@ -464,7 +865,7 @@ function resetRestTimer() {
 }
 
 function setExerciseDone(dayIdx, exIdx, done, opts = {}) {
-  const { recordUndo = true, startRest = true, rerender = true } = opts;
+  const { recordUndo = true, startRest = true, rerender = true, syncProgress = true } = opts;
   const dayState = getDayState(dayIdx);
 
   if (!dayState.started && done) {
@@ -472,8 +873,16 @@ function setExerciseDone(dayIdx, exIdx, done, opts = {}) {
     dayState.startedAt = new Date().toISOString();
   }
 
-  dayState.completed[exIdx] = done;
-  dayState.completedAt[exIdx] = done ? new Date().toISOString() : null;
+  if (syncProgress) {
+    if (done) {
+      fillExerciseProgressAsDone(dayState, dayIdx, exIdx, new Date().toISOString());
+    } else {
+      resetExerciseProgress(dayState, dayIdx, exIdx);
+    }
+  } else {
+    dayState.completed[exIdx] = done;
+    dayState.completedAt[exIdx] = done ? (dayState.completedAt[exIdx] || new Date().toISOString()) : null;
+  }
 
   if (done && recordUndo) {
     setLastUndo(dayIdx, exIdx);
@@ -487,6 +896,59 @@ function setExerciseDone(dayIdx, exIdx, done, opts = {}) {
   if (done) triggerHaptic(25);
 
   if (rerender) render(dayIdx);
+}
+
+function setExerciseSetDone(dayIdx, exIdx, setIdx, done, opts = {}) {
+  const { recordUndo = true, startRest = true, rerender = true, triggerFeedback = true } = opts;
+  const dayState = getDayState(dayIdx);
+  const planSets = getExercisePlanSets(dayIdx, exIdx);
+  if (!Number.isInteger(setIdx) || setIdx < 0 || setIdx >= planSets.length) return;
+
+  if (!dayState.started) {
+    dayState.started = true;
+    dayState.startedAt = new Date().toISOString();
+  }
+
+  const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
+  const target = planSets[setIdx].reps.target;
+  const wasDone = setProgress[setIdx].repsDone >= target;
+  setProgress[setIdx].repsDone = done ? target : 0;
+  setProgress[setIdx].completedAt = done ? new Date().toISOString() : null;
+  syncExerciseCompletionFromProgress(dayState, dayIdx, exIdx);
+
+  if (done && !wasDone && recordUndo) {
+    setLastUndo(dayIdx, exIdx, setIdx);
+    markSetFillAnim(dayIdx, exIdx, setIdx, 'on');
+  } else if (!done && wasDone) {
+    markSetFillAnim(dayIdx, exIdx, setIdx, 'off');
+  } else if (!done && appState.ui.lastUndo && appState.ui.lastUndo.dayIdx === dayIdx && appState.ui.lastUndo.exIdx === exIdx && appState.ui.lastUndo.setIdx === setIdx) {
+    clearLastUndo();
+  }
+
+  saveAppState();
+
+  if (done && startRest && !wasDone) {
+    startRestTimer(appState.rest.durationSec);
+  }
+
+  if (triggerFeedback) triggerHaptic(done ? [18, 12, 18] : 10);
+  if (rerender) render(dayIdx);
+}
+
+function toggleExerciseSet(event, dayIdx, exIdx, setIdx) {
+  event.stopPropagation();
+  const dayState = getDayState(dayIdx);
+  const planSets = getExercisePlanSets(dayIdx, exIdx);
+  if (!Number.isInteger(setIdx) || setIdx < 0 || setIdx >= planSets.length) return;
+
+  const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
+  const isDone = setProgress[setIdx].repsDone >= planSets[setIdx].reps.target;
+  setExerciseSetDone(dayIdx, exIdx, setIdx, !isDone, {
+    recordUndo: !isDone,
+    startRest: !isDone,
+    rerender: true,
+    triggerFeedback: true,
+  });
 }
 
 function toggleExercise(event, idx, exIdx) {
@@ -505,7 +967,16 @@ function undoLastAction() {
   const lu = appState.ui.lastUndo;
   if (!lu) return;
 
-  setExerciseDone(lu.dayIdx, lu.exIdx, false, { recordUndo: false, startRest: false, rerender: false });
+  if (Number.isInteger(lu.setIdx)) {
+    setExerciseSetDone(lu.dayIdx, lu.exIdx, lu.setIdx, false, {
+      recordUndo: false,
+      startRest: false,
+      rerender: false,
+      triggerFeedback: false,
+    });
+  } else {
+    setExerciseDone(lu.dayIdx, lu.exIdx, false, { recordUndo: false, startRest: false, rerender: false, syncProgress: true });
+  }
   clearLastUndo();
   saveAppState();
   resetRestTimer();
@@ -540,7 +1011,7 @@ function switchDay(dayIdx) {
 
   if (prefersReducedMotion()) {
     setActiveDay(targetDay);
-    render(active);
+    render(active, { animateRows: false });
     return;
   }
 
@@ -551,7 +1022,7 @@ function switchDay(dayIdx) {
 
   daySwitchSwapTimeout = setTimeout(() => {
     setActiveDay(targetDay);
-    render(active);
+    render(active, { animateRows: true });
 
     document.body.classList.remove('theme-fade-out');
     document.body.classList.add('theme-fade-in');
@@ -599,6 +1070,7 @@ function openModal(dayIdx, focusExerciseIdx = null) {
   const dayState = getDayState(safeDayIdx);
   const exIdx = Number.isInteger(focusExerciseIdx) ? Math.max(0, Math.min(d.ex.length - 1, focusExerciseIdx)) : 0;
   const ex = d.ex[exIdx];
+  const progress = getExerciseProgress(dayState, safeDayIdx, exIdx);
   const doneTag = dayState.completed[exIdx] ? '<span class="m-tag done">DONE</span>' : tagEl(ex.t);
 
   document.getElementById('mh-sys').textContent = `// EXERCISE DETAILS \u2014 ${d.idx} / EX ${String(exIdx + 1).padStart(2, '0')}`;
@@ -614,6 +1086,14 @@ function openModal(dayIdx, focusExerciseIdx = null) {
         <div class="m-detail-row">
           <span class="m-detail-label">Sets / Reps</span>
           <span class="m-detail-value">${escapeHtml(ex.s)}</span>
+        </div>
+        <div class="m-detail-row">
+          <span class="m-detail-label">Structured Plan</span>
+          <span class="m-detail-value">${escapeHtml(formatExercisePlanBreakdown(safeDayIdx, exIdx))}</span>
+        </div>
+        <div class="m-detail-row">
+          <span class="m-detail-label">Progress</span>
+          <span class="m-detail-value">${escapeHtml(formatExerciseProgressLabel(progress))}</span>
         </div>
         <div class="m-detail-row">
           <span class="m-detail-label">Tag</span>
@@ -637,7 +1117,7 @@ function closeModal() {
 }
 
 function clearProgress() {
-  const shouldClear = window.confirm('Clear all saved workout progress? This resets v2 session data.');
+  const shouldClear = window.confirm('Clear all saved workout progress? This resets v3 session data.');
   if (!shouldClear) return;
 
   const currentDay = active;
@@ -711,7 +1191,8 @@ function applyDayTheme(idx) {
   if (themeMeta) themeMeta.setAttribute('content', accentHex);
 }
 
-function render(dayIdx) {
+function render(dayIdx, opts = {}) {
+  const { animateRows = false } = opts;
   active = clampDayIndex(dayIdx);
   const d = DAYS[active];
   const dayState = getDayState(active);
@@ -735,7 +1216,10 @@ function render(dayIdx) {
     <div class="hchip"><div class="hchip-label">Progress</div><div class="hchip-val">${completed}/${totalExercises}</div></div>
   `;
 
-  document.getElementById('ex-panel').innerHTML =
+  const exPanel = document.getElementById('ex-panel');
+  exPanel.classList.toggle('rows-animate', animateRows);
+
+  exPanel.innerHTML =
     `<div class="ex-section-label">
       <span class="ex-section-title">EXERCISES // ${d.idx} ${d.cat.toUpperCase()}</span>
       <div class="day-controls">
@@ -755,13 +1239,41 @@ function render(dayIdx) {
     </details>` +
     d.ex.map((e, i) => {
       const isDone = dayState.completed[i];
-      return `<div class="ex-row ${isDone ? 'done' : ''}" style="animation-delay:${i * 0.03}s">
-        <span class="ex-num">${String(i + 1).padStart(2, '0')}</span>
-        <div class="ex-name">${escapeHtml(e.n)}</div>
-        <div class="ex-sets">${escapeHtml(e.s)}</div>
-        <div class="ex-actions">
-          <button type="button" class="ex-complete-btn ${isDone ? 'done' : ''}" onclick="toggleExercise(event, ${active}, ${i})">${isDone ? 'Done' : 'Mark Done'}</button>
-          <button type="button" class="ex-details-btn" onclick="openModal(${active}, ${i})">Details</button>
+      const progress = getExerciseProgress(dayState, active, i);
+      const inProgress = !isDone && progress.repsDoneTotal > 0;
+      const progressLabel = formatExerciseProgressLabel(progress);
+      const schemeLabel = formatExerciseSchemeLabel(active, i);
+      const planSets = getExercisePlanSets(active, i);
+      const setProgress = ensureExerciseSetProgress(dayState, active, i);
+      const setButtons = planSets.map((set, setIdx) => {
+        const isSetDone = setProgress[setIdx].repsDone >= set.reps.target;
+        const fillAnimMode = consumeSetFillAnim(active, i, setIdx);
+        const fillAnimClass = fillAnimMode === 'on'
+          ? ' fill-diag-on'
+          : fillAnimMode === 'off'
+            ? ' fill-diag-off'
+            : '';
+        return `<button type="button" class="set-dot ${isSetDone ? 'done' : ''}${fillAnimClass}" onclick="toggleExerciseSet(event, ${active}, ${i}, ${setIdx})" aria-pressed="${isSetDone ? 'true' : 'false'}" aria-label="${escapeHtml(`${e.n} set ${setIdx + 1} of ${planSets.length}`)}"><span class="set-dot-label">${set.reps.target}</span></button>`;
+      }).join('');
+      const rowAnimDelay = animateRows ? ` style="animation-delay:${i * 0.03}s"` : '';
+
+      return `<div class="ex-row ${isDone ? 'done' : ''} ${inProgress ? 'in-progress' : ''}"${rowAnimDelay}>
+        <div class="ex-head">
+          <div class="ex-head-main">
+            <div class="ex-name">${escapeHtml(e.n)}</div>
+            <div class="ex-prescription">${escapeHtml(e.s)}</div>
+          </div>
+          <div class="ex-scheme">${escapeHtml(schemeLabel)}</div>
+        </div>
+        <div class="ex-set-track">
+          ${setButtons}
+        </div>
+        <div class="ex-foot">
+          <div class="ex-progress ${isDone ? 'done' : ''}">${escapeHtml(progressLabel)}</div>
+          <div class="ex-actions">
+            <button type="button" class="ex-complete-btn ${isDone ? 'done' : ''}" onclick="toggleExercise(event, ${active}, ${i})">${isDone ? 'Done' : 'Mark Done'}</button>
+            <button type="button" class="ex-details-btn" onclick="openModal(${active}, ${i})">Details</button>
+          </div>
         </div>
       </div>`;
     }).join('');
@@ -945,7 +1457,7 @@ function boot() {
   initServiceWorker();
   updateNetworkStatus();
   scheduleUndoExpiry();
-  render(active);
+  render(active, { animateRows: true });
 }
 
 boot();
