@@ -27,6 +27,21 @@ python3 -m http.server 8000
 
 Then visit `http://localhost:8000`.
 
+## Deploy to GitHub Pages
+
+This repo now includes a ready workflow at `/Users/aka/Code/personal/exercise/.github/workflows/deploy-pages.yml`.
+
+1. Push this repository to GitHub.
+2. In GitHub, open `Settings -> Pages`.
+3. Set `Source` to `GitHub Actions`.
+4. Push to `main` or `master` (or run `Actions -> Deploy to GitHub Pages -> Run workflow`).
+5. Open the deployed URL shown in the workflow logs (typically `https://<username>.github.io/<repo>/`).
+
+Notes:
+- If your default branch is neither `main` nor `master`, update the branch list in `.github/workflows/deploy-pages.yml`.
+- A `.nojekyll` file is included so Pages serves files directly without Jekyll processing.
+- All app asset URLs are relative, so project-page subpaths work without extra path configuration.
+
 ## PWA install
 
 - Chromium (Chrome/Edge): use the `INSTALL` button when it appears in the top bar.

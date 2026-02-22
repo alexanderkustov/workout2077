@@ -1,4 +1,4 @@
-const CACHE_NAME = 'split-sys-app-shell-v2';
+const CACHE_NAME = 'split-sys-app-shell-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -46,6 +46,12 @@ async function cacheFirst(request) {
   return fresh;
 }
 
+function isDocumentRequest(request) {
+  if (request.mode === 'navigate') return true;
+  const accept = request.headers.get('accept') || '';
+  return accept.includes('text/html');
+}
+
 self.addEventListener('fetch', event => {
   const { request } = event;
   if (request.method !== 'GET') return;
@@ -54,8 +60,11 @@ self.addEventListener('fetch', event => {
   if (url.origin !== self.location.origin) return;
 
   const pathname = url.pathname;
-  const isDocRequest = request.mode === 'navigate' || pathname.endsWith('/index.html') || pathname === '/' || pathname.endsWith('/exercise/');
-  const isStaticAsset = pathname.endsWith('.css') || pathname.endsWith('.js') || pathname.endsWith('.png') || pathname.endsWith('.webmanifest');
+  const isDocRequest = isDocumentRequest(request);
+  const isStaticAsset = pathname.endsWith('.css')
+    || pathname.endsWith('.js')
+    || pathname.endsWith('.png')
+    || pathname.endsWith('.webmanifest');
 
   if (isDocRequest) {
     event.respondWith(networkFirst(request));
