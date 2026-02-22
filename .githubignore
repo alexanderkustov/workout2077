@@ -1,0 +1,30 @@
+# macOS / Windows filesystem noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Common dependency/build output
+node_modules/
+dist/
+build/
+coverage/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local environment files
+.env
+.env.*
