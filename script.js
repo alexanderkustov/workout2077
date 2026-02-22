@@ -71,7 +71,7 @@ const BUILTIN_RAW_DAYS = [
 const STORAGE_KEY = 'splitSysAppStateV2';
 const OLD_STORAGE_KEY = 'splitSysWorkoutStateV1';
 const ROUTINE_PROFILE_STORAGE_KEY = 'splitSysRoutineProfileV1';
-const APP_STATE_VERSION = 3;
+const APP_STATE_VERSION = 4;
 const ROUTINE_PROFILE_VERSION = 1;
 const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_SHORT_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -112,6 +112,8 @@ const IOS_HINT_DISMISSED_KEY = 'splitSysIosHintDismissedV1';
 const DAY_SWITCH_FADE_OUT_MS = 150;
 const DAY_SWITCH_FADE_IN_MS = 300;
 const SET_FILL_ANIM_WINDOW_MS = 900;
+const HISTORY_RETENTION_DAYS = 60;
+const HISTORY_RETENTION_MS = HISTORY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
 let appState = null;
 let active = 0;
@@ -124,6 +126,10 @@ let audioCtx = null;
 let daySwitchSwapTimeout = null;
 let daySwitchClearTimeout = null;
 let pendingSetFillAnim = null;
+let swWaitingWorker = null;
+let swDismissedWorkerScriptUrl = '';
+let swReloadOnControllerChange = false;
+let swApplyInFlight = false;
 let DAYS = buildDaysFromRaw(BUILTIN_RAW_DAYS);
 
 function clampDayIndex(idx) {
@@ -168,6 +174,12 @@ function toPositiveInt(value, fallback = 1) {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) return fallback;
   return Math.round(num);
+}
+
+function isIsoDateString(value) {
+  if (typeof value !== 'string') return false;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms);
 }
 
 function parseRepRange(rawRepText) {
@@ -802,8 +814,98 @@ function getExercisePlanSets(dayIdx, exIdx) {
   return exercise.p.sets;
 }
 
+function cloneSetProgressSnapshot(rawSet) {
+  const source = rawSet && typeof rawSet === 'object' ? rawSet : {};
+  return {
+    repsDone: Number.isFinite(source.repsDone) ? Math.max(0, Math.round(source.repsDone)) : 0,
+    completedAt: isIsoDateString(source.completedAt) ? source.completedAt : null,
+    loadDone: typeof source.loadDone === 'string' && source.loadDone.trim() ? source.loadDone.trim() : null,
+    loggedAt: isIsoDateString(source.loggedAt) ? source.loggedAt : null,
+  };
+}
+
+function normalizeHistorySet(rawSet, fallbackSetIdx = 0) {
+  if (!rawSet || typeof rawSet !== 'object') return null;
+  const setIdxNum = Number(rawSet.setIdx);
+  const setIdx = Number.isInteger(setIdxNum) && setIdxNum >= 0 ? setIdxNum : fallbackSetIdx;
+  const targetNum = Number(rawSet.targetReps);
+  const targetReps = Number.isFinite(targetNum) && targetNum > 0 ? Math.round(targetNum) : 1;
+  const repsNum = Number(rawSet.repsDone);
+  const repsDone = Number.isFinite(repsNum) ? Math.max(0, Math.round(repsNum)) : 0;
+  const loadDone = typeof rawSet.loadDone === 'string' && rawSet.loadDone.trim() ? rawSet.loadDone.trim() : null;
+  const planLoad = typeof rawSet.planLoad === 'string' && rawSet.planLoad.trim() ? rawSet.planLoad.trim() : null;
+
+  return {
+    setIdx,
+    targetReps,
+    repsDone: Math.min(repsDone, targetReps),
+    loadDone,
+    planLoad,
+  };
+}
+
+function normalizeHistoryExercise(rawExercise) {
+  if (!rawExercise || typeof rawExercise !== 'object') return null;
+  const exerciseName = typeof rawExercise.exerciseName === 'string' ? rawExercise.exerciseName.trim() : '';
+  if (!exerciseName) return null;
+
+  const rawSets = Array.isArray(rawExercise.sets) ? rawExercise.sets : [];
+  const sets = rawSets
+    .map((set, idx) => normalizeHistorySet(set, idx))
+    .filter(Boolean);
+  if (sets.length === 0) return null;
+
+  return {
+    exerciseName,
+    sets,
+  };
+}
+
+function pruneHistorySessions(rawSessions, nowMs = Date.now()) {
+  if (!Array.isArray(rawSessions) || rawSessions.length === 0) return [];
+  const cutoffMs = nowMs - HISTORY_RETENTION_MS;
+  const normalized = [];
+
+  for (const rawSession of rawSessions) {
+    if (!rawSession || typeof rawSession !== 'object') continue;
+
+    const endedAt = isIsoDateString(rawSession.endedAt) ? rawSession.endedAt : null;
+    if (!endedAt) continue;
+    const endedAtMs = Date.parse(endedAt);
+    if (!Number.isFinite(endedAtMs) || endedAtMs < cutoffMs) continue;
+
+    const dayIdxNum = Number(rawSession.dayIdx);
+    if (!Number.isInteger(dayIdxNum) || dayIdxNum < 0 || dayIdxNum >= DAYS.length) continue;
+    const dayIdx = dayIdxNum;
+    const dayName = typeof rawSession.dayName === 'string' && rawSession.dayName.trim()
+      ? rawSession.dayName.trim()
+      : DAYS[dayIdx]?.name || DAY_NAMES[dayIdx];
+
+    const rawExercises = Array.isArray(rawSession.exercises) ? rawSession.exercises : [];
+    const exercises = rawExercises
+      .map(normalizeHistoryExercise)
+      .filter(Boolean);
+    if (exercises.length === 0) continue;
+
+    normalized.push({
+      endedAt,
+      dayIdx,
+      dayName,
+      exercises,
+    });
+  }
+
+  normalized.sort((a, b) => Date.parse(b.endedAt) - Date.parse(a.endedAt));
+  return normalized;
+}
+
 function createEmptySetProgress(dayIdx, exIdx) {
-  return getExercisePlanSets(dayIdx, exIdx).map(() => ({ repsDone: 0, completedAt: null }));
+  return getExercisePlanSets(dayIdx, exIdx).map(() => ({
+    repsDone: 0,
+    completedAt: null,
+    loadDone: null,
+    loggedAt: null,
+  }));
 }
 
 function createEmptyDayState(dayIdx) {
@@ -826,6 +928,7 @@ function createInitialAppState(defaultDayIdx) {
     version: APP_STATE_VERSION,
     activeDay: clampDayIndex(defaultDayIdx),
     days,
+    historySessions: [],
     rest: {
       durationSec: REST_TIMER_DURATION_SEC,
       endsAt: null,
@@ -845,10 +948,17 @@ function normalizeSetProgress(rawSetProgress, planSet) {
   let repsDone = Number.isFinite(repsNum) ? Math.max(0, Math.round(repsNum)) : 0;
   if (raw.completed === true && repsDone < target) repsDone = target;
   repsDone = Math.min(repsDone, target);
+  const completedAt = repsDone >= target && isIsoDateString(raw.completedAt) ? raw.completedAt : null;
+  const loadDone = typeof raw.loadDone === 'string' && raw.loadDone.trim() ? raw.loadDone.trim() : null;
+  const loggedAt = isIsoDateString(raw.loggedAt)
+    ? raw.loggedAt
+    : completedAt;
 
   return {
     repsDone,
-    completedAt: repsDone >= target && typeof raw.completedAt === 'string' ? raw.completedAt : null,
+    completedAt,
+    loadDone,
+    loggedAt,
   };
 }
 
@@ -910,7 +1020,8 @@ function normalizeDayState(rawDay, dayIdx) {
 
 function sanitizeAppState(raw, defaultDayIdx) {
   const base = createInitialAppState(defaultDayIdx);
-  if (!raw || typeof raw !== 'object' || (raw.version !== 2 && raw.version !== APP_STATE_VERSION)) return base;
+  const versionNum = Number(raw?.version);
+  if (!raw || typeof raw !== 'object' || !Number.isInteger(versionNum) || versionNum < 2 || versionNum > APP_STATE_VERSION) return base;
 
   const normalized = {
     ...base,
@@ -929,13 +1040,17 @@ function sanitizeAppState(raw, defaultDayIdx) {
   for (let i = 0; i < DAYS.length; i += 1) {
     normalized.days[String(i)] = normalizeDayState(raw.days?.[String(i)], i);
   }
+  normalized.historySessions = pruneHistorySessions(raw.historySessions, Date.now());
 
   const lu = raw.ui?.lastUndo;
   if (lu && Number.isInteger(lu.dayIdx) && Number.isInteger(lu.exIdx) && Number.isFinite(lu.at)) {
+    const setIdx = Number.isInteger(lu.setIdx) ? lu.setIdx : null;
+    const hasSetSnapshot = lu.setSnapshot && typeof lu.setSnapshot === 'object';
     normalized.ui.lastUndo = {
       dayIdx: lu.dayIdx,
       exIdx: lu.exIdx,
-      setIdx: Number.isInteger(lu.setIdx) ? lu.setIdx : null,
+      setIdx,
+      setSnapshot: setIdx !== null && hasSetSnapshot ? cloneSetProgressSnapshot(lu.setSnapshot) : null,
       at: lu.at,
     };
   }
@@ -945,8 +1060,11 @@ function sanitizeAppState(raw, defaultDayIdx) {
 
 function saveAppState() {
   if (!appState) return;
+  const prunedHistory = pruneHistorySessions(appState.historySessions, Date.now());
+  appState.historySessions = prunedHistory;
   const payload = {
     ...appState,
+    historySessions: prunedHistory,
     rest: {
       ...appState.rest,
       endsAt: null,
@@ -1102,9 +1220,11 @@ function syncExerciseCompletionFromProgress(dayState, dayIdx, exIdx) {
 
 function resetExerciseProgress(dayState, dayIdx, exIdx) {
   const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
+  const timestamp = new Date().toISOString();
   for (let i = 0; i < setProgress.length; i += 1) {
     setProgress[i].repsDone = 0;
     setProgress[i].completedAt = null;
+    setProgress[i].loggedAt = timestamp;
   }
   dayState.completed[exIdx] = false;
   dayState.completedAt[exIdx] = null;
@@ -1118,6 +1238,11 @@ function fillExerciseProgressAsDone(dayState, dayIdx, exIdx, completedAt) {
   for (let i = 0; i < setProgress.length; i += 1) {
     setProgress[i].repsDone = planSets[i].reps.target;
     setProgress[i].completedAt = setProgress[i].completedAt || timestamp;
+    if (!setProgress[i].loadDone) {
+      const planLoad = typeof planSets[i].load === 'string' && planSets[i].load.trim() ? planSets[i].load.trim() : null;
+      setProgress[i].loadDone = planLoad;
+    }
+    setProgress[i].loggedAt = timestamp;
   }
 
   dayState.completed[exIdx] = true;
@@ -1190,11 +1315,13 @@ function playBeep() {
   }
 }
 
-function setLastUndo(dayIdx, exIdx, setIdx = null) {
+function setLastUndo(dayIdx, exIdx, setIdx = null, setSnapshot = null) {
+  const normalizedSetIdx = Number.isInteger(setIdx) ? setIdx : null;
   appState.ui.lastUndo = {
     dayIdx,
     exIdx,
-    setIdx: Number.isInteger(setIdx) ? setIdx : null,
+    setIdx: normalizedSetIdx,
+    setSnapshot: normalizedSetIdx !== null ? cloneSetProgressSnapshot(setSnapshot) : null,
     at: Date.now(),
   };
   scheduleUndoExpiry();
@@ -1408,12 +1535,25 @@ function setExerciseSetDone(dayIdx, exIdx, setIdx, done, opts = {}) {
   const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
   const target = planSets[setIdx].reps.target;
   const wasDone = setProgress[setIdx].repsDone >= target;
-  setProgress[setIdx].repsDone = done ? target : 0;
-  setProgress[setIdx].completedAt = done ? new Date().toISOString() : null;
+  const previousSetSnapshot = cloneSetProgressSnapshot(setProgress[setIdx]);
+  const timestamp = new Date().toISOString();
+  if (done) {
+    setProgress[setIdx].repsDone = target;
+    setProgress[setIdx].completedAt = timestamp;
+    if (!setProgress[setIdx].loadDone) {
+      const planLoad = typeof planSets[setIdx].load === 'string' && planSets[setIdx].load.trim() ? planSets[setIdx].load.trim() : null;
+      setProgress[setIdx].loadDone = planLoad;
+    }
+    setProgress[setIdx].loggedAt = timestamp;
+  } else {
+    setProgress[setIdx].repsDone = 0;
+    setProgress[setIdx].completedAt = null;
+    setProgress[setIdx].loggedAt = timestamp;
+  }
   syncExerciseCompletionFromProgress(dayState, dayIdx, exIdx);
 
   if (done && !wasDone && recordUndo) {
-    setLastUndo(dayIdx, exIdx, setIdx);
+    setLastUndo(dayIdx, exIdx, setIdx, previousSetSnapshot);
     markSetFillAnim(dayIdx, exIdx, setIdx, 'on');
   } else if (!done && wasDone) {
     markSetFillAnim(dayIdx, exIdx, setIdx, 'off');
@@ -1428,6 +1568,19 @@ function setExerciseSetDone(dayIdx, exIdx, setIdx, done, opts = {}) {
   }
 
   if (triggerFeedback) triggerHaptic(done ? [18, 12, 18] : 10);
+  if (rerender) render(dayIdx);
+}
+
+function restoreExerciseSetFromSnapshot(dayIdx, exIdx, setIdx, snapshot, opts = {}) {
+  const { rerender = true } = opts;
+  const dayState = getDayState(dayIdx);
+  const planSets = getExercisePlanSets(dayIdx, exIdx);
+  if (!Number.isInteger(setIdx) || setIdx < 0 || setIdx >= planSets.length) return;
+
+  const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
+  setProgress[setIdx] = normalizeSetProgress(snapshot, planSets[setIdx]);
+  syncExerciseCompletionFromProgress(dayState, dayIdx, exIdx);
+  saveAppState();
   if (rerender) render(dayIdx);
 }
 
@@ -1454,6 +1607,54 @@ function toggleExercise(event, idx, exIdx) {
   setExerciseDone(idx, exIdx, nextDoneState, { recordUndo: nextDoneState, startRest: nextDoneState, rerender: true });
 }
 
+function buildDaySessionSnapshot(dayIdx, endedAt = new Date().toISOString()) {
+  const safeDayIdx = clampDayIndex(dayIdx);
+  const day = DAYS[safeDayIdx];
+  const dayState = getDayState(safeDayIdx);
+  if (!day || !dayState) return null;
+
+  const exercises = [];
+  for (let exIdx = 0; exIdx < day.ex.length; exIdx += 1) {
+    const planSets = getExercisePlanSets(safeDayIdx, exIdx);
+    const setProgress = ensureExerciseSetProgress(dayState, safeDayIdx, exIdx);
+    const sets = [];
+
+    for (let setIdx = 0; setIdx < planSets.length; setIdx += 1) {
+      const setState = setProgress[setIdx];
+      const hasLog = setState.repsDone > 0 || Boolean(setState.loadDone);
+      if (!hasLog) continue;
+      sets.push({
+        setIdx,
+        targetReps: planSets[setIdx].reps.target,
+        repsDone: Math.min(planSets[setIdx].reps.target, Math.max(0, setState.repsDone)),
+        loadDone: setState.loadDone || null,
+        planLoad: typeof planSets[setIdx].load === 'string' && planSets[setIdx].load.trim() ? planSets[setIdx].load.trim() : null,
+      });
+    }
+
+    if (sets.length === 0) continue;
+    exercises.push({
+      exerciseName: day.ex[exIdx].n,
+      sets,
+    });
+  }
+
+  if (exercises.length === 0) return null;
+  return {
+    endedAt,
+    dayIdx: safeDayIdx,
+    dayName: day.name,
+    exercises,
+  };
+}
+
+function captureDaySessionHistory(dayIdx) {
+  const session = buildDaySessionSnapshot(dayIdx, new Date().toISOString());
+  if (!session) return;
+  const existing = Array.isArray(appState.historySessions) ? appState.historySessions : [];
+  appState.historySessions = pruneHistorySessions([session, ...existing], Date.now());
+}
+
 function undoLastAction() {
   if (!canUndoLast()) {
     render(active);
@@ -1464,12 +1665,16 @@ function undoLastAction() {
   if (!lu) return;
 
   if (Number.isInteger(lu.setIdx)) {
-    setExerciseSetDone(lu.dayIdx, lu.exIdx, lu.setIdx, false, {
-      recordUndo: false,
-      startRest: false,
-      rerender: false,
-      triggerFeedback: false,
-    });
+    if (lu.setSnapshot) {
+      restoreExerciseSetFromSnapshot(lu.dayIdx, lu.exIdx, lu.setIdx, lu.setSnapshot, { rerender: false });
+    } else {
+      setExerciseSetDone(lu.dayIdx, lu.exIdx, lu.setIdx, false, {
+        recordUndo: false,
+        startRest: false,
+        rerender: false,
+        triggerFeedback: false,
+      });
+    }
   } else {
     setExerciseDone(lu.dayIdx, lu.exIdx, false, { recordUndo: false, startRest: false, rerender: false, syncProgress: true });
   }
@@ -1482,9 +1687,13 @@ function undoLastAction() {
 
 function toggleDayStarted(dayIdx) {
   const dayState = getDayState(dayIdx);
+  const wasStarted = dayState.started;
   dayState.started = !dayState.started;
   if (dayState.started && !dayState.startedAt) dayState.startedAt = new Date().toISOString();
-  if (!dayState.started) skipRestTimer(true);
+  if (!dayState.started) {
+    if (wasStarted) captureDaySessionHistory(dayIdx);
+    skipRestTimer(true);
+  }
   saveAppState();
   triggerHaptic(18);
   render(dayIdx);
@@ -1571,6 +1780,45 @@ function renderExerciseDescriptionHtml(description) {
   return safeChunks.map(chunk => `<p>${chunk}</p>`).join('');
 }
 
+function formatHistoryTimestamp(isoTimestamp) {
+  const ms = Date.parse(isoTimestamp);
+  if (!Number.isFinite(ms)) return 'Unknown date';
+  return new Date(ms).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatHistorySetSummary(sets) {
+  if (!Array.isArray(sets) || sets.length === 0) return '';
+  return sets.map(set => {
+    const load = set.loadDone || set.planLoad;
+    return `S${set.setIdx + 1} ${set.repsDone}/${set.targetReps}${load ? ` @ ${load}` : ''}`;
+  }).join(' • ');
+}
+
+function getRecentExerciseHistory(dayIdx, exerciseName, limit = 5) {
+  const safeDayIdx = clampDayIndex(dayIdx);
+  const name = String(exerciseName || '').trim();
+  if (!name) return [];
+
+  const sessions = pruneHistorySessions(appState.historySessions, Date.now());
+  const matches = [];
+  for (const session of sessions) {
+    if (session.dayIdx !== safeDayIdx) continue;
+    const match = session.exercises.find(exercise => exercise.exerciseName === name);
+    if (!match) continue;
+    matches.push({
+      endedAt: session.endedAt,
+      sets: match.sets,
+    });
+    if (matches.length >= limit) break;
+  }
+  return matches;
+}
+
 function isDayPickerOpen() {
   const picker = document.getElementById('day-picker-bg');
   return Boolean(picker && picker.classList.contains('open'));
@@ -1630,14 +1878,64 @@ function openModal(dayIdx, focusExerciseIdx = null) {
   const exIdx = Number.isInteger(focusExerciseIdx) ? Math.max(0, Math.min(d.ex.length - 1, focusExerciseIdx)) : 0;
   const ex = d.ex[exIdx];
   const progress = getExerciseProgress(dayState, safeDayIdx, exIdx);
+  const planSets = getExercisePlanSets(safeDayIdx, exIdx);
+  const setProgress = ensureExerciseSetProgress(dayState, safeDayIdx, exIdx);
   const doneTag = dayState.completed[exIdx] ? '<span class="m-tag done">DONE</span>' : tagEl(ex.t);
   const descriptionHtml = renderExerciseDescriptionHtml(ex.d);
+  const setLogRows = planSets.map((set, setIdx) => {
+    const setState = setProgress[setIdx];
+    const targetText = set.reps.min && set.reps.max && set.reps.min !== set.reps.max
+      ? `${set.reps.min}-${set.reps.max}`
+      : `${set.reps.target}`;
+    const targetWithLoad = set.load ? `${targetText} @ ${set.load}` : targetText;
+    const repsDone = Math.min(set.reps.target, Math.max(0, setState.repsDone));
+    const setDone = repsDone >= set.reps.target;
+    return `<div class="m-setlog-row">
+      <label class="m-setlog-label" for="set-log-reps-${setIdx}">
+        SET ${setIdx + 1}
+        <span class="m-setlog-target">TARGET ${escapeHtml(targetWithLoad)}</span>
+      </label>
+      <input
+        type="number"
+        id="set-log-reps-${setIdx}"
+        class="m-setlog-input"
+        min="0"
+        max="${set.reps.target}"
+        value="${repsDone}"
+        data-setlog-reps="${setIdx}"
+        oninput="updateSetLogReps(event, ${safeDayIdx}, ${exIdx}, ${setIdx})"
+        aria-label="${escapeHtml(`Set ${setIdx + 1} reps done`)}"
+      >
+      <input
+        type="text"
+        class="m-setlog-input"
+        value="${escapeHtml(setState.loadDone || '')}"
+        data-setlog-load="${setIdx}"
+        onchange="updateSetLogLoad(event, ${safeDayIdx}, ${exIdx}, ${setIdx})"
+        placeholder="${escapeHtml(set.load || 'Load used')}"
+        aria-label="${escapeHtml(`Set ${setIdx + 1} load used`)}"
+      >
+      <span class="m-setlog-status ${setDone ? 'done' : ''}" data-setlog-status="${setIdx}">${setDone ? 'Done' : 'Open'}</span>
+    </div>`;
+  }).join('');
+  const recentHistory = getRecentExerciseHistory(safeDayIdx, ex.n, 5);
+  const historyHtml = recentHistory.length > 0
+    ? `<ul class="m-history-list">${recentHistory.map(entry => `
+      <li class="m-history-item">
+        <div class="m-history-date">${escapeHtml(formatHistoryTimestamp(entry.endedAt))}</div>
+        <div class="m-history-summary">${escapeHtml(formatHistorySetSummary(entry.sets))}</div>
+      </li>
+    `).join('')}</ul>`
+    : '<p class="m-history-empty">No recent set logs yet. End a day to capture this history.</p>';
 
   document.getElementById('mh-sys').textContent = `// EXERCISE DETAILS \u2014 ${d.idx} / EX ${String(exIdx + 1).padStart(2, '0')}`;
   document.getElementById('mh-name').textContent = ex.n;
   document.getElementById('mh-cat').textContent = d.cat;
 
-  document.getElementById('modal-body').innerHTML = `
+  const modalBody = document.getElementById('modal-body');
+  modalBody.dataset.dayIdx = String(safeDayIdx);
+  modalBody.dataset.exIdx = String(exIdx);
+  modalBody.innerHTML = `
     <div class="m-detail">
       <div class="m-detail-media" role="img" aria-label="Exercise image placeholder">
         <div class="m-detail-media-label">IMAGE PLACEHOLDER</div>
@@ -1653,13 +1951,32 @@ function openModal(dayIdx, focusExerciseIdx = null) {
         </div>
         <div class="m-detail-row">
           <span class="m-detail-label">Progress</span>
-          <span class="m-detail-value">${escapeHtml(formatExerciseProgressLabel(progress))}</span>
+          <span class="m-detail-value" id="modal-progress-value">${escapeHtml(formatExerciseProgressLabel(progress))}</span>
         </div>
         <div class="m-detail-row">
           <span class="m-detail-label">Tag</span>
           <span class="m-detail-tags">${doneTag || '<span class="m-tag">LIFT</span>'}</span>
         </div>
       </div>
+      <section class="m-setlog-section" aria-label="Set log editor">
+        <div class="m-setlog-head">
+          <span class="m-setlog-title">Set Log</span>
+          <span class="m-setlog-sub" id="modal-setlog-summary">SETS ${progress.setsDone}/${progress.setsTotal}</span>
+        </div>
+        <div class="m-setlog-grid">
+          <div class="m-setlog-row head">
+            <span>Set</span>
+            <span>Reps</span>
+            <span>Load</span>
+            <span>Status</span>
+          </div>
+          ${setLogRows}
+        </div>
+      </section>
+      <section class="m-history-section" aria-label="Recent history">
+        <h3 class="m-history-title">Recent Sessions</h3>
+        ${historyHtml}
+      </section>
       <div class="m-detail-copy">
         ${descriptionHtml}
       </div>
@@ -1670,15 +1987,112 @@ function openModal(dayIdx, focusExerciseIdx = null) {
   document.body.style.overflow = 'hidden';
 }
 
+function isOpenModalForExercise(dayIdx, exIdx) {
+  const modal = document.getElementById('modal-bg');
+  const modalBody = document.getElementById('modal-body');
+  if (!modal || !modalBody || !modal.classList.contains('open')) return false;
+  return Number(modalBody.dataset.dayIdx) === dayIdx && Number(modalBody.dataset.exIdx) === exIdx;
+}
+
+function syncOpenModalSetLogUi(dayIdx, exIdx) {
+  if (!isOpenModalForExercise(dayIdx, exIdx)) return;
+  const dayState = getDayState(dayIdx);
+  const planSets = getExercisePlanSets(dayIdx, exIdx);
+  const setProgress = ensureExerciseSetProgress(dayState, dayIdx, exIdx);
+  const progress = getExerciseProgress(dayState, dayIdx, exIdx);
+
+  const progressEl = document.getElementById('modal-progress-value');
+  if (progressEl) progressEl.textContent = formatExerciseProgressLabel(progress);
+  const summaryEl = document.getElementById('modal-setlog-summary');
+  if (summaryEl) summaryEl.textContent = `SETS ${progress.setsDone}/${progress.setsTotal}`;
+
+  const modalBody = document.getElementById('modal-body');
+  if (!modalBody) return;
+
+  for (let setIdx = 0; setIdx < planSets.length; setIdx += 1) {
+    const statusEl = modalBody.querySelector(`[data-setlog-status="${setIdx}"]`);
+    const repsInput = modalBody.querySelector(`input[data-setlog-reps="${setIdx}"]`);
+    const loadInput = modalBody.querySelector(`input[data-setlog-load="${setIdx}"]`);
+    const repsDone = Math.min(planSets[setIdx].reps.target, Math.max(0, setProgress[setIdx].repsDone));
+    const isDone = repsDone >= planSets[setIdx].reps.target;
+
+    if (statusEl) {
+      statusEl.textContent = isDone ? 'Done' : 'Open';
+      statusEl.classList.toggle('done', isDone);
+    }
+    if (repsInput && document.activeElement !== repsInput) {
+      repsInput.value = String(repsDone);
+    }
+    if (loadInput && document.activeElement !== loadInput) {
+      loadInput.value = setProgress[setIdx].loadDone || '';
+    }
+  }
+}
+
+function updateSetLogReps(event, dayIdx, exIdx, setIdx) {
+  const safeDayIdx = clampDayIndex(dayIdx);
+  const dayState = getDayState(safeDayIdx);
+  const planSets = getExercisePlanSets(safeDayIdx, exIdx);
+  if (!Number.isInteger(setIdx) || setIdx < 0 || setIdx >= planSets.length) return;
+  const setProgress = ensureExerciseSetProgress(dayState, safeDayIdx, exIdx);
+  const targetReps = planSets[setIdx].reps.target;
+  const rawValue = Number(event?.target?.value);
+  const nextReps = Number.isFinite(rawValue) ? Math.min(targetReps, Math.max(0, Math.round(rawValue))) : 0;
+  const prevReps = setProgress[setIdx].repsDone;
+  if (nextReps === prevReps) {
+    syncOpenModalSetLogUi(safeDayIdx, exIdx);
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  setProgress[setIdx].repsDone = nextReps;
+  setProgress[setIdx].completedAt = nextReps >= targetReps ? (setProgress[setIdx].completedAt || timestamp) : null;
+  if (nextReps >= targetReps && !setProgress[setIdx].loadDone) {
+    const planLoad = typeof planSets[setIdx].load === 'string' && planSets[setIdx].load.trim() ? planSets[setIdx].load.trim() : null;
+    setProgress[setIdx].loadDone = planLoad;
+  }
+  setProgress[setIdx].loggedAt = timestamp;
+  syncExerciseCompletionFromProgress(dayState, safeDayIdx, exIdx);
+  saveAppState();
+
+  syncOpenModalSetLogUi(safeDayIdx, exIdx);
+  render(active);
+}
+
+function updateSetLogLoad(event, dayIdx, exIdx, setIdx) {
+  const safeDayIdx = clampDayIndex(dayIdx);
+  const dayState = getDayState(safeDayIdx);
+  const planSets = getExercisePlanSets(safeDayIdx, exIdx);
+  if (!Number.isInteger(setIdx) || setIdx < 0 || setIdx >= planSets.length) return;
+  const setProgress = ensureExerciseSetProgress(dayState, safeDayIdx, exIdx);
+  const raw = typeof event?.target?.value === 'string' ? event.target.value.trim() : '';
+  const nextLoad = raw || null;
+  if (setProgress[setIdx].loadDone === nextLoad) return;
+
+  setProgress[setIdx].loadDone = nextLoad;
+  setProgress[setIdx].loggedAt = new Date().toISOString();
+  saveAppState();
+  if (event?.target && event.target.value !== (nextLoad || '')) {
+    event.target.value = nextLoad || '';
+  }
+  syncOpenModalSetLogUi(safeDayIdx, exIdx);
+}
+
 function closeModal() {
-  document.getElementById('modal-bg').classList.remove('open');
+  const modal = document.getElementById('modal-bg');
+  const modalBody = document.getElementById('modal-body');
+  if (modalBody) {
+    delete modalBody.dataset.dayIdx;
+    delete modalBody.dataset.exIdx;
+  }
+  if (modal) modal.classList.remove('open');
   if (!isDayPickerOpen()) {
     document.body.style.overflow = '';
   }
 }
 
 function clearProgress() {
-  const shouldClear = window.confirm('Clear all saved workout progress? This resets v3 session data.');
+  const shouldClear = window.confirm('Clear all saved workout progress? This resets v4 session data.');
   if (!shouldClear) return;
 
   const currentDay = active;
@@ -1732,6 +2146,7 @@ function updateSessionDock() {
   }
 
   dock.classList.toggle('with-rest', restActive);
+  updateAppUpdateBanner();
 }
 
 function applyDayTheme(idx) {
@@ -1874,6 +2289,82 @@ function updateNetworkStatus() {
   badge.classList.toggle('offline', !online);
 }
 
+function canApplyAppUpdateNow() {
+  if (!appState) return false;
+  const activeDayState = getDayState(active);
+  return !isRestTimerActive() && !activeDayState.started;
+}
+
+function updateAppUpdateBanner() {
+  const banner = document.getElementById('app-update-banner');
+  const textEl = document.getElementById('app-update-text');
+  const applyBtn = document.getElementById('app-update-apply-btn');
+  if (!banner || !textEl || !applyBtn) return;
+
+  const workerScriptUrl = swWaitingWorker?.scriptURL || '';
+  const shouldHide = !swWaitingWorker || (workerScriptUrl && swDismissedWorkerScriptUrl === workerScriptUrl);
+  if (shouldHide) {
+    banner.classList.add('hidden');
+    banner.classList.remove('blocked');
+    applyBtn.disabled = true;
+    return;
+  }
+
+  const canApply = canApplyAppUpdateNow() && !swApplyInFlight;
+  banner.classList.remove('hidden');
+  banner.classList.toggle('blocked', !canApply);
+  applyBtn.disabled = !canApply;
+  applyBtn.textContent = swApplyInFlight ? 'Applying...' : 'Apply Update';
+  textEl.textContent = canApply
+    ? 'Update ready. Apply to reload with the latest version.'
+    : 'Update ready. Finish your active day and rest timer before applying.';
+}
+
+function markServiceWorkerWaiting(worker) {
+  if (!worker) return;
+  const nextScriptUrl = worker.scriptURL || '';
+  const prevScriptUrl = swWaitingWorker?.scriptURL || '';
+  swWaitingWorker = worker;
+  if (nextScriptUrl && nextScriptUrl !== prevScriptUrl) {
+    swDismissedWorkerScriptUrl = '';
+  }
+  swApplyInFlight = false;
+  updateAppUpdateBanner();
+}
+
+function dismissAppUpdatePrompt() {
+  const waitingScript = swWaitingWorker?.scriptURL || '';
+  if (waitingScript) swDismissedWorkerScriptUrl = waitingScript;
+  updateAppUpdateBanner();
+}
+
+function applyAppUpdate() {
+  if (!swWaitingWorker || swApplyInFlight) return;
+  if (!canApplyAppUpdateNow()) {
+    updateAppUpdateBanner();
+    return;
+  }
+
+  swApplyInFlight = true;
+  swReloadOnControllerChange = true;
+  updateAppUpdateBanner();
+  try {
+    swWaitingWorker.postMessage({ type: 'SKIP_WAITING' });
+  } catch {
+    swApplyInFlight = false;
+    swReloadOnControllerChange = false;
+    updateAppUpdateBanner();
+    return;
+  }
+
+  setTimeout(() => {
+    if (!swApplyInFlight) return;
+    swApplyInFlight = false;
+    swReloadOnControllerChange = false;
+    updateAppUpdateBanner();
+  }, 10000);
+}
+
 function setInstallButtonVisible(visible) {
   const installBtn = document.getElementById('install-app-btn');
   if (!installBtn) return;
@@ -1951,9 +2442,31 @@ function initServiceWorker() {
   if (!canRegister) return;
 
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {
+    navigator.serviceWorker.register('./sw.js').then(registration => {
+      if (registration.waiting) markServiceWorkerWaiting(registration.waiting);
+
+      registration.addEventListener('updatefound', () => {
+        const installing = registration.installing;
+        if (!installing) return;
+        installing.addEventListener('statechange', () => {
+          if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+            markServiceWorkerWaiting(registration.waiting || installing);
+          }
+        });
+      });
+
+      registration.update().catch(() => {
+        // Ignore update polling failures.
+      });
+    }).catch(() => {
       // Ignore SW registration errors; app should still work without PWA layer.
     });
+  });
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!swReloadOnControllerChange) return;
+    swReloadOnControllerChange = false;
+    window.location.reload();
   });
 }
 
@@ -2026,6 +2539,12 @@ function initGlobalHandlers() {
   const dockSkipRestBtn = document.getElementById('dock-skip-rest-btn');
   if (dockSkipRestBtn) dockSkipRestBtn.addEventListener('click', () => skipRestTimer());
 
+  const appUpdateApplyBtn = document.getElementById('app-update-apply-btn');
+  if (appUpdateApplyBtn) appUpdateApplyBtn.addEventListener('click', applyAppUpdate);
+
+  const appUpdateDismissBtn = document.getElementById('app-update-dismiss-btn');
+  if (appUpdateDismissBtn) appUpdateDismissBtn.addEventListener('click', dismissAppUpdatePrompt);
+
   window.addEventListener('online', updateNetworkStatus);
   window.addEventListener('offline', updateNetworkStatus);
 }
@@ -2041,6 +2560,7 @@ function boot() {
   initInstallUX();
   initServiceWorker();
   updateNetworkStatus();
+  updateAppUpdateBanner();
   scheduleUndoExpiry();
   openDayPicker(active);
 }

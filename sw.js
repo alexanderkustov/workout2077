@@ -1,4 +1,4 @@
-const CACHE_NAME = 'split-sys-app-shell-v4';
+const CACHE_NAME = 'split-sys-app-shell-v5';
 const APP_SHELL = [
   './',
   './index.html',
@@ -17,7 +17,7 @@ const APP_SHELL = [
 
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL))
   );
 });
 
@@ -29,36 +29,57 @@ self.addEventListener('activate', event => {
   );
 });
 
-async function networkFirst(request) {
-  const cache = await caches.open(CACHE_NAME);
-  const url = new URL(request.url);
-  const isAdminPage = url.pathname.endsWith('/admin') || url.pathname.endsWith('/admin/') || url.pathname.includes('/admin/');
-  const fallbackDoc = isAdminPage ? './admin/index.html' : './index.html';
-  try {
-    const fresh = await fetch(request);
-    if (fresh && fresh.ok) cache.put(request, fresh.clone());
-    return fresh;
-  } catch {
-    const cached = await cache.match(request, { ignoreSearch: true }) || await cache.match(fallbackDoc);
-    if (cached) return cached;
-    throw new Error('offline');
-  }
-}
-
-async function cacheFirst(request) {
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
-  if (cached) return cached;
-
-  const fresh = await fetch(request);
-  if (fresh && fresh.ok) cache.put(request, fresh.clone());
-  return fresh;
-}
+self.addEventListener('message', event => {
+  if (!event.data || event.data.type !== 'SKIP_WAITING') return;
+  self.skipWaiting();
+});
 
 function isDocumentRequest(request) {
   if (request.mode === 'navigate') return true;
   const accept = request.headers.get('accept') || '';
   return accept.includes('text/html');
+}
+
+function isStaticAsset(pathname) {
+  return pathname.endsWith('.css')
+    || pathname.endsWith('.js')
+    || pathname.endsWith('.png')
+    || pathname.endsWith('.webmanifest');
+}
+
+async function networkFirstDocument(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const url = new URL(request.url);
+  const isAdminPage = url.pathname.endsWith('/admin') || url.pathname.endsWith('/admin/') || url.pathname.includes('/admin/');
+  const fallbackDoc = isAdminPage ? './admin/index.html' : './index.html';
+
+  try {
+    const fresh = await fetch(request);
+    if (fresh && fresh.ok) cache.put(request, fresh.clone());
+    return fresh;
+  } catch {
+    const cached = await cache.match(request, { ignoreSearch: true })
+      || await cache.match(fallbackDoc)
+      || await cache.match('./index.html');
+    if (cached) return cached;
+    return new Response('Offline', { status: 503, statusText: 'Offline' });
+  }
+}
+
+async function staleWhileRevalidate(request, event) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request, { ignoreSearch: true });
+  const networkPromise = fetch(request).then(fresh => {
+    if (fresh && fresh.ok) cache.put(request, fresh.clone());
+    return fresh;
+  });
+
+  if (cached) {
+    event.waitUntil(networkPromise.catch(() => null));
+    return cached;
+  }
+
+  return networkPromise;
 }
 
 self.addEventListener('fetch', event => {
@@ -68,19 +89,12 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
-  const pathname = url.pathname;
-  const isDocRequest = isDocumentRequest(request);
-  const isStaticAsset = pathname.endsWith('.css')
-    || pathname.endsWith('.js')
-    || pathname.endsWith('.png')
-    || pathname.endsWith('.webmanifest');
-
-  if (isDocRequest) {
-    event.respondWith(networkFirst(request));
+  if (isDocumentRequest(request)) {
+    event.respondWith(networkFirstDocument(request));
     return;
   }
 
-  if (isStaticAsset) {
-    event.respondWith(cacheFirst(request));
+  if (isStaticAsset(url.pathname)) {
+    event.respondWith(staleWhileRevalidate(request, event));
   }
 });

@@ -9,6 +9,7 @@ Simple single-page workout tracker built as plain HTML, CSS, and JavaScript.
 - Start/end day flow, per-exercise done toggles, and a fixed mobile session dock.
 - Automatic rest timer (`1:30`) after marking an exercise done.
 - Undo window (`5s`) for the last done action.
+- Set-level actual logging (reps + load) in `Details` with per-exercise recent history.
 - Per-day notes and small UI preferences (haptics/sound).
 - Installable PWA (Chromium prompt + iOS add-to-home guidance).
 - Offline core usage after first online load (app shell + local progress).
@@ -47,6 +48,15 @@ Notes:
 - Chromium (Chrome/Edge): use the `INSTALL` button when it appears in the top bar.
 - iOS Safari: tap Share, then choose `Add to Home Screen` (hint banner shown in-app).
 
+## PWA updates
+
+- When a new service worker version is waiting, the app shows an `Update ready` banner.
+- `Apply Update` is enabled only when idle:
+  - Rest timer is not running.
+  - Active day is not started.
+- `Dismiss` hides the banner for the current waiting version.
+- Applying sends `SKIP_WAITING` to the waiting service worker and reloads on controller swap.
+
 ## Offline and file-mode behavior
 
 - Offline shell works after first successful online load when served over `http://localhost` or `https`.
@@ -56,9 +66,20 @@ Notes:
 ## Data model note
 
 - App state now uses `splitSysAppStateV2`.
+- Current schema version is `4` (`APP_STATE_VERSION` in `script.js`).
 - Legacy key `splitSysWorkoutStateV1` is ignored and removed when V2 is initialized.
-- This upgrade intentionally allows reset instead of migration.
+- v2/v3 state is normalized into v4 on load.
 - Custom routine profile storage uses `splitSysRoutineProfileV1`.
+
+## Set logging and history
+
+- Open `Details` on an exercise to edit per-set `reps` and `load`.
+- Set dots remain fast completion toggles and still trigger the rest timer flow.
+- Completing a set with no load logged will auto-fill planned load when available.
+- Ending a started day stores a session snapshot for logged sets.
+- Recent history shown in `Details` is matched by day index + exercise name.
+- History retention is rolling `60` days and is pruned automatically.
+- `Clear Progress` also clears stored session history.
 
 ## Custom routine CSV import
 
