@@ -2,7 +2,7 @@
 Exercise schema (advanced):
 { n, s, t?, p?: { sets: [{ load?: string, reps: { min?: number, max?: number, target: number } }] } }
 */
-const RAW_DAYS = [
+const BUILTIN_RAW_DAYS = [
   { name:'Monday', short:'Mon', cat:'Upper Body', idx:'DAY 01', sets:32, dur:'80 min',
     ex:[
       {n:'Flat Barbell Bench Press', s:'60 / 80 / 90 / 95 kg \u00d7 6\u20138 reps', t:''},
@@ -68,12 +68,35 @@ const RAW_DAYS = [
     ex:[{n:'Rest & Recovery', s:'Full day off \u2014 sleep, eat, recover', t:''}]},
 ];
 
-// `normalizeDaySchema` upgrades legacy shorthand into structured per-set rep targets.
-const DAYS = RAW_DAYS.map(normalizeDaySchema);
-
 const STORAGE_KEY = 'splitSysAppStateV2';
 const OLD_STORAGE_KEY = 'splitSysWorkoutStateV1';
+const ROUTINE_PROFILE_STORAGE_KEY = 'splitSysRoutineProfileV1';
 const APP_STATE_VERSION = 3;
+const ROUTINE_PROFILE_VERSION = 1;
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const DAY_SHORT_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const DAY_NUMBER_INDEX = DAY_NAMES.reduce((map, _name, idx) => ({ ...map, [String(idx + 1)]: idx }), {});
+const DAY_NAME_INDEX = {
+  mon: 0,
+  monday: 0,
+  tue: 1,
+  tues: 1,
+  tuesday: 1,
+  wed: 2,
+  wednesday: 2,
+  thu: 3,
+  thur: 3,
+  thurs: 3,
+  thursday: 3,
+  fri: 4,
+  friday: 4,
+  sat: 5,
+  saturday: 5,
+  sun: 6,
+  sunday: 6,
+};
+const CSV_REQUIRED_HEADERS = ['day', 'category', 'duration', 'sets', 'is_rest', 'exercise', 'summary'];
+const CSV_OPTIONAL_HEADERS = ['tag'];
 const DAY_THEME_COLORS = [
   '#00d9ff',
   '#ff2bd6',
@@ -101,6 +124,7 @@ let audioCtx = null;
 let daySwitchSwapTimeout = null;
 let daySwitchClearTimeout = null;
 let pendingSetFillAnim = null;
+let DAYS = buildDaysFromRaw(BUILTIN_RAW_DAYS);
 
 function clampDayIndex(idx) {
   if (!Number.isFinite(idx)) return 0;
@@ -296,6 +320,471 @@ function normalizeDaySchema(rawDay) {
     rest: Boolean(day.rest),
     ex: exercises,
   };
+}
+
+function dayIndexLabel(dayIdx) {
+  return `DAY ${String(dayIdx + 1).padStart(2, '0')}`;
+}
+
+function buildDaysFromRaw(rawDays) {
+  const source = Array.isArray(rawDays) ? rawDays : BUILTIN_RAW_DAYS;
+  return DAY_NAMES.map((name, dayIdx) => {
+    const raw = source[dayIdx] && typeof source[dayIdx] === 'object' ? source[dayIdx] : {};
+    return normalizeDaySchema({
+      ...raw,
+      name,
+      short: DAY_SHORT_NAMES[dayIdx],
+      idx: dayIndexLabel(dayIdx),
+    });
+  });
+}
+
+function sanitizeRoutineProfile(rawProfile) {
+  if (!rawProfile || typeof rawProfile !== 'object') return null;
+  if (rawProfile.version !== ROUTINE_PROFILE_VERSION) return null;
+  if (!Array.isArray(rawProfile.days) || rawProfile.days.length !== DAY_NAMES.length) return null;
+
+  const days = buildDaysFromRaw(rawProfile.days);
+  if (days.some(day => day.ex.length === 0)) return null;
+
+  return {
+    version: ROUTINE_PROFILE_VERSION,
+    days: days.map(day => ({
+      name: day.name,
+      short: day.short,
+      cat: day.cat,
+      idx: day.idx,
+      sets: day.sets,
+      dur: day.dur,
+      rest: day.rest,
+      ex: day.ex.map(exercise => ({
+        n: exercise.n,
+        s: exercise.s,
+        t: exercise.t,
+        p: exercise.p,
+      })),
+    })),
+  };
+}
+
+function loadRoutineProfile() {
+  let parsed = null;
+  try {
+    const raw = localStorage.getItem(ROUTINE_PROFILE_STORAGE_KEY);
+    if (!raw) return null;
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  const sanitized = sanitizeRoutineProfile(parsed);
+  if (sanitized) return sanitized;
+
+  try {
+    localStorage.removeItem(ROUTINE_PROFILE_STORAGE_KEY);
+  } catch {
+    // Ignore localStorage failures.
+  }
+
+  return null;
+}
+
+function saveRoutineProfile(profile) {
+  const sanitized = sanitizeRoutineProfile(profile);
+  if (!sanitized) return false;
+
+  try {
+    localStorage.setItem(ROUTINE_PROFILE_STORAGE_KEY, JSON.stringify(sanitized));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearRoutineProfile() {
+  try {
+    localStorage.removeItem(ROUTINE_PROFILE_STORAGE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function initializeRoutineDays() {
+  const storedProfile = loadRoutineProfile();
+  DAYS = buildDaysFromRaw(storedProfile?.days || BUILTIN_RAW_DAYS);
+}
+
+function getUiPreferencesSnapshot() {
+  return {
+    soundEnabled: Boolean(appState?.ui?.soundEnabled),
+    hapticsEnabled: appState?.ui?.hapticsEnabled !== false,
+  };
+}
+
+function setRoutineFeedback(message, type = 'info') {
+  const feedbackEl = document.getElementById('routine-feedback');
+  if (!feedbackEl) return;
+
+  feedbackEl.textContent = message || '';
+  feedbackEl.classList.remove('success', 'error');
+  if (!message) return;
+
+  if (type === 'success') feedbackEl.classList.add('success');
+  if (type === 'error') feedbackEl.classList.add('error');
+}
+
+function normalizeCsvHeader(rawHeader) {
+  return String(rawHeader || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function parseCsvText(csvText) {
+  const source = String(csvText ?? '').replace(/^\uFEFF/, '');
+  if (!source.trim()) throw new Error('CSV file is empty.');
+
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (source[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+      continue;
+    }
+
+    if (char === ',') {
+      row.push(field);
+      field = '';
+      continue;
+    }
+
+    if (char === '\n' || char === '\r') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+      if (char === '\r' && source[i + 1] === '\n') i += 1;
+      continue;
+    }
+
+    field += char;
+  }
+
+  if (inQuotes) throw new Error('CSV parsing failed: unmatched quote.');
+
+  row.push(field);
+  rows.push(row);
+
+  const cleaned = rows.filter((current, idx) => idx === 0 || current.some(value => String(value).trim() !== ''));
+  if (cleaned.length === 0 || cleaned[0].every(value => String(value).trim() === '')) {
+    throw new Error('CSV must include a header row.');
+  }
+
+  return cleaned;
+}
+
+function parseCsvDayIndex(rawDay, rowNumber) {
+  const value = String(rawDay || '').trim().toLowerCase();
+  if (!value) throw new Error(`Row ${rowNumber}: day is required.`);
+
+  if (Object.prototype.hasOwnProperty.call(DAY_NUMBER_INDEX, value)) return DAY_NUMBER_INDEX[value];
+  const normalizedName = value.replace(/\./g, '');
+  if (Object.prototype.hasOwnProperty.call(DAY_NAME_INDEX, normalizedName)) return DAY_NAME_INDEX[normalizedName];
+
+  throw new Error(`Row ${rowNumber}: invalid day "${rawDay}". Use 1-7 or Mon-Sun.`);
+}
+
+function parseCsvSetCount(rawSets, rowNumber) {
+  const text = String(rawSets || '').trim();
+  if (!text) return null;
+
+  const parsed = Number(text);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Row ${rowNumber}: invalid sets value "${rawSets}". Use a positive integer or leave blank.`);
+  }
+
+  return parsed;
+}
+
+function parseCsvRestFlag(rawRest, rowNumber) {
+  const text = String(rawRest || '').trim().toLowerCase();
+  if (!text) return null;
+  if (text === 'true' || text === '1') return true;
+  if (text === 'false' || text === '0') return false;
+  throw new Error(`Row ${rowNumber}: invalid is_rest value "${rawRest}". Use true/false/1/0.`);
+}
+
+function buildCsvDayMeta(rows, dayIdx) {
+  let category = '';
+  let duration = '';
+  let sets = null;
+  let rest = null;
+
+  for (const row of rows) {
+    if (row.category) {
+      if (category && category !== row.category) {
+        throw new Error(`Row ${row.rowNumber}: conflicting category for ${DAY_NAMES[dayIdx]}.`);
+      }
+      category = row.category;
+    }
+
+    if (row.duration) {
+      if (duration && duration !== row.duration) {
+        throw new Error(`Row ${row.rowNumber}: conflicting duration for ${DAY_NAMES[dayIdx]}.`);
+      }
+      duration = row.duration;
+    }
+
+    const parsedSets = parseCsvSetCount(row.sets, row.rowNumber);
+    if (parsedSets !== null) {
+      if (sets !== null && sets !== parsedSets) {
+        throw new Error(`Row ${row.rowNumber}: conflicting sets value for ${DAY_NAMES[dayIdx]}.`);
+      }
+      sets = parsedSets;
+    }
+
+    const parsedRest = parseCsvRestFlag(row.isRest, row.rowNumber);
+    if (parsedRest !== null) {
+      if (rest !== null && rest !== parsedRest) {
+        throw new Error(`Row ${row.rowNumber}: conflicting is_rest value for ${DAY_NAMES[dayIdx]}.`);
+      }
+      rest = parsedRest;
+    }
+  }
+
+  return {
+    category: category || (rest === true ? 'Rest Day' : 'Custom Day'),
+    duration: duration || '\u2014',
+    sets: rest === true ? null : sets,
+    rest: rest === true,
+  };
+}
+
+function buildCsvDayExercises(rows, dayIdx, isRestDay) {
+  const exercises = [];
+
+  for (const row of rows) {
+    const name = row.exercise;
+    const summary = row.summary;
+    const tag = row.tag;
+
+    if (!isRestDay) {
+      if (!name || !summary) {
+        throw new Error(`Row ${row.rowNumber}: exercise and summary are required for non-rest days.`);
+      }
+
+      exercises.push({
+        n: name,
+        s: summary,
+        t: tag || '',
+      });
+      continue;
+    }
+
+    if (name || summary || tag) {
+      exercises.push({
+        n: name || 'Rest & Recovery',
+        s: summary || 'Full day off - recover',
+        t: tag || '',
+      });
+    }
+  }
+
+  if (exercises.length === 0) {
+    throw new Error(`${DAY_NAMES[dayIdx]} has an empty day group. Add at least one exercise row.`);
+  }
+
+  return exercises;
+}
+
+function parseCsvRoutineProfile(csvText) {
+  const rows = parseCsvText(csvText);
+  if (rows.length < 2) throw new Error('CSV must include at least one data row.');
+
+  const headerRow = rows[0];
+  const headerIndex = {};
+  headerRow.forEach((header, idx) => {
+    const normalized = normalizeCsvHeader(header);
+    if (!normalized) return;
+    if (Object.prototype.hasOwnProperty.call(headerIndex, normalized)) {
+      throw new Error(`CSV has duplicate header "${header}".`);
+    }
+    headerIndex[normalized] = idx;
+  });
+
+  const missingHeaders = CSV_REQUIRED_HEADERS.filter(header => !Object.prototype.hasOwnProperty.call(headerIndex, header));
+  if (missingHeaders.length > 0) {
+    throw new Error(`CSV missing required columns: ${missingHeaders.join(', ')}.`);
+  }
+
+  const validHeaders = new Set([...CSV_REQUIRED_HEADERS, ...CSV_OPTIONAL_HEADERS]);
+  Object.keys(headerIndex).forEach(key => {
+    if (!validHeaders.has(key)) {
+      // Unknown columns are allowed for spreadsheet convenience.
+      delete headerIndex[key];
+    }
+  });
+
+  const dayRows = DAY_NAMES.map(() => []);
+
+  for (let rowIdx = 1; rowIdx < rows.length; rowIdx += 1) {
+    const rowNumber = rowIdx + 1;
+    const row = rows[rowIdx];
+    if (row.every(value => String(value).trim() === '')) continue;
+
+    const get = key => {
+      const colIdx = headerIndex[key];
+      if (typeof colIdx !== 'number') return '';
+      return String(row[colIdx] ?? '').trim();
+    };
+
+    const dayIdx = parseCsvDayIndex(get('day'), rowNumber);
+    dayRows[dayIdx].push({
+      rowNumber,
+      category: get('category'),
+      duration: get('duration'),
+      sets: get('sets'),
+      isRest: get('is_rest'),
+      exercise: get('exercise'),
+      summary: get('summary'),
+      tag: get('tag'),
+    });
+  }
+
+  const missingDayIdx = dayRows.findIndex(rowsForDay => rowsForDay.length === 0);
+  if (missingDayIdx !== -1) {
+    throw new Error(`Missing rows for ${DAY_NAMES[missingDayIdx]} (day ${missingDayIdx + 1}).`);
+  }
+
+  const days = dayRows.map((rowsForDay, dayIdx) => {
+    const meta = buildCsvDayMeta(rowsForDay, dayIdx);
+    return {
+      name: DAY_NAMES[dayIdx],
+      short: DAY_SHORT_NAMES[dayIdx],
+      cat: meta.category,
+      idx: dayIndexLabel(dayIdx),
+      sets: meta.sets,
+      dur: meta.duration,
+      rest: meta.rest,
+      ex: buildCsvDayExercises(rowsForDay, dayIdx, meta.rest),
+    };
+  });
+
+  return sanitizeRoutineProfile({
+    version: ROUTINE_PROFILE_VERSION,
+    days,
+  });
+}
+
+function resetStateForRoutineChange(dayIdx, prefs = getUiPreferencesSnapshot()) {
+  const nextDayIdx = clampDayIndex(dayIdx);
+  active = nextDayIdx;
+  appState = createInitialAppState(nextDayIdx);
+  appState.ui.soundEnabled = Boolean(prefs.soundEnabled);
+  appState.ui.hapticsEnabled = prefs.hapticsEnabled !== false;
+
+  clearLastUndo();
+  clearDaySwitchTransitionTimers();
+  document.body.classList.remove('theme-fade-out', 'theme-fade-in');
+  pendingSetFillAnim = null;
+  resetRestTimer();
+  closeModal();
+  saveAppState();
+  scheduleUndoExpiry();
+}
+
+function applyRoutineDays(rawDays, dayIdx = active) {
+  const nextDays = buildDaysFromRaw(rawDays);
+  if (nextDays.length !== DAY_NAMES.length || nextDays.some(day => day.ex.length === 0)) {
+    throw new Error('Routine must contain 7 days, and each day must have at least one exercise.');
+  }
+
+  const prefs = getUiPreferencesSnapshot();
+  DAYS = nextDays;
+  resetStateForRoutineChange(dayIdx, prefs);
+  render(active, { animateRows: true });
+}
+
+function readTextFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => resolve(String(reader.result || '')));
+    reader.addEventListener('error', () => reject(new Error('Unable to read selected CSV file.')));
+    reader.readAsText(file);
+  });
+}
+
+function openRoutineCsvPicker() {
+  const input = document.getElementById('routine-csv-input');
+  if (!input) return;
+  input.value = '';
+  input.click();
+}
+
+async function handleRoutineCsvInputChange(event) {
+  const input = event.target;
+  const file = input?.files?.[0];
+  if (!file) return;
+
+  setRoutineFeedback(`Importing ${file.name}...`);
+
+  try {
+    const csvText = await readTextFile(file);
+    const profile = parseCsvRoutineProfile(csvText);
+    if (!profile) throw new Error('CSV import failed. Could not normalize routine data.');
+
+    if (!saveRoutineProfile(profile)) {
+      throw new Error('Unable to save custom routine. Check browser storage permissions.');
+    }
+
+    applyRoutineDays(profile.days, active);
+    setRoutineFeedback(`Imported custom routine from ${file.name}.`, 'success');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to import CSV routine.';
+    setRoutineFeedback(message, 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
+function resetRoutineToDefault() {
+  const hasCustomRoutine = Boolean(loadRoutineProfile());
+  if (!hasCustomRoutine) {
+    setRoutineFeedback('Built-in routine is already active.');
+    return;
+  }
+
+  const confirmed = window.confirm('Reset custom routine and restore the built-in weekly split?');
+  if (!confirmed) return;
+
+  if (!clearRoutineProfile()) {
+    setRoutineFeedback('Unable to clear saved custom routine.', 'error');
+    return;
+  }
+
+  applyRoutineDays(BUILTIN_RAW_DAYS, active);
+  setRoutineFeedback('Restored built-in routine.', 'success');
 }
 
 function getExercisePlanSets(dayIdx, exIdx) {
@@ -1424,6 +1913,15 @@ function initGlobalHandlers() {
   const clearBtn = document.getElementById('clear-progress-btn');
   if (clearBtn) clearBtn.addEventListener('click', clearProgress);
 
+  const importBtn = document.getElementById('import-csv-btn');
+  if (importBtn) importBtn.addEventListener('click', openRoutineCsvPicker);
+
+  const csvInput = document.getElementById('routine-csv-input');
+  if (csvInput) csvInput.addEventListener('change', handleRoutineCsvInputChange);
+
+  const resetRoutineBtn = document.getElementById('reset-default-routine-btn');
+  if (resetRoutineBtn) resetRoutineBtn.addEventListener('click', resetRoutineToDefault);
+
   const restSkipBtn = document.getElementById('rest-skip-btn');
   if (restSkipBtn) restSkipBtn.addEventListener('click', () => skipRestTimer());
 
@@ -1447,6 +1945,7 @@ function boot() {
   const jsDayToIdx = { 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 0: 6 };
   const defaultDay = jsDayToIdx[new Date().getDay()] ?? 0;
 
+  initializeRoutineDays();
   appState = loadAppState(defaultDay);
   active = clampDayIndex(appState.activeDay);
 

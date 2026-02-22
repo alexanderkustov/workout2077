@@ -92,6 +92,12 @@
         <div class="sb-stat"><div class="sb-stat-label">Total sets</div><div class="sb-stat-val">68</div></div>
         <div class="sb-stat"><div class="sb-stat-label">Cycle %</div><div class="sb-stat-val">57<span class="sb-stat-unit">%</span></div></div>
       </div>
+      <div class="sb-routine-wrap">
+        <button type="button" class="sb-clear-btn sb-routine-btn" id="import-csv-btn">Import CSV</button>
+        <button type="button" class="sb-clear-btn sb-routine-btn" id="reset-default-routine-btn">Reset Routine</button>
+        <input type="file" id="routine-csv-input" class="routine-csv-input" accept=".csv,text/csv">
+        <div class="routine-feedback" id="routine-feedback" aria-live="polite"></div>
+      </div>
       <div class="sb-clear-wrap">
         <button type="button" class="sb-clear-btn" id="clear-progress-btn">Clear Progress</button>
       </div>

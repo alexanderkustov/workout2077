@@ -43,11 +43,25 @@ Then visit `http://localhost:8000`.
 - App state now uses `splitSysAppStateV2`.
 - Legacy key `splitSysWorkoutStateV1` is ignored and removed when V2 is initialized.
 - This upgrade intentionally allows reset instead of migration.
+- Custom routine profile storage uses `splitSysRoutineProfileV1`.
+
+## Custom routine CSV import
+
+- Use `Import CSV` in the sidebar to load a custom weekly routine.
+- CSV required headers:
+  - `day,category,duration,sets,is_rest,exercise,summary`
+- Optional header:
+  - `tag`
+- `day` accepts `1..7` or weekday names (`Mon..Sun`).
+- `is_rest` accepts `true|false|1|0`.
+- `sets` accepts a positive integer or blank.
+- Import requires rows for all 7 days.
+- `Reset Routine` restores the built-in default plan.
 
 ## Edit workout content
 
 - Open `/Users/aka/Code/personal/exercise/script.js`.
-- Update the `DAYS` array.
+- Update the `BUILTIN_RAW_DAYS` array.
 - Each day entry includes:
   - `name`, `short`, `cat`, `idx`
   - `sets`, `dur`

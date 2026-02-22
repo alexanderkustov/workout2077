@@ -908,6 +908,42 @@ summary:focus-visible,
 .sb-stat-val { font-family: 'Orbitron', sans-serif; font-size: 18px; font-weight: 700; color: var(--accent); text-shadow: 0 0 10px rgba(var(--accent-rgb),0.5); }
 .sb-stat-unit { font-size: 8px; color: var(--muted2); margin-left: 2px; }
 
+.sb-routine-wrap {
+  padding: 10px 12px 0;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+}
+
+.sb-routine-btn {
+  font-size: 8px;
+  padding: 8px 10px;
+}
+
+.routine-csv-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.routine-feedback {
+  min-height: 14px;
+  font-size: 8px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted2);
+}
+
+.routine-feedback.success {
+  color: #00f5b8;
+}
+
+.routine-feedback.error {
+  color: #ff8c50;
+}
+
 .sb-clear-wrap {
   padding: 10px 12px 12px;
   border-top: 1px solid var(--border);
